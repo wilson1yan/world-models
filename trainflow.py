@@ -2,19 +2,20 @@
 import argparse
 from os.path import join, exists
 from os import mkdir
+import numpy as np
 
 import torch
 import torch.utils.data
 from torch import optim
 from torch.nn import functional as F
-from torch.distributions.multivariate_normal import MultivariateNormal
+from torch.distributions.normal import Normal
 from torchvision import transforms
 from torchvision.utils import save_image
 
-from models.flow import Glow
+from models.flow import Glow, RealNVP
 
 from utils.misc import save_checkpoint
-from utils.misc import LSIZE, RED_SIZE
+from utils.misc import RED_SIZE, ASIZE
 ## WARNING : THIS SHOULD BE REPLACE WITH PYTORCH 0.5
 from utils.learning import EarlyStopping
 from utils.learning import ReduceLROnPlateau
@@ -66,20 +67,26 @@ test_loader = torch.utils.data.DataLoader(
     dataset_test, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
 N = ASIZE * RED_SIZE * RED_SIZE
-prior = MultivariateNormal(torch.zeros(N).to(device), torch.eye(N).to(device))
+prior = Normal(0, 1)
 model = Glow().to(device)
-optimizer = optim.Adam(model.parameters())
+optimizer = optim.Adam(model.parameters(), lr=5e-4)
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
 
 def loss_function(z, logdet):
     """ Flow loss function """
     z = z.view(z.size(0), -1)
-    log_prob = prior.log_prob(z)
+    log_prob = prior.log_prob(z).sum(1)
     ll = log_prob + logdet
     loss = -ll.mean() / N
     return loss
 
+
+def process(data):
+    data *= 255
+    data = torch.floor(data / 64)
+    data += torch.rand_like(data)
+    return data
 
 def train(epoch):
     """ One training epoch """
@@ -87,14 +94,13 @@ def train(epoch):
     dataset_train.load_next_buffer()
     train_loss = 0
     for batch_idx, data in enumerate(train_loader):
-        data *= 255 # scale back up
-        data += torch.rand_like(data.size()) # dequantization
+        data = process(data)
         data = data.to(device)
         optimizer.zero_grad()
         z, logdet = model(data)
         loss = loss_function(z, logdet)
         loss.backward()
-        train_loss += loss.item()
+        train_loss += loss.item() / np.log(2)
         optimizer.step()
         if batch_idx % 20 == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
@@ -113,11 +119,10 @@ def test():
     test_loss = 0
     with torch.no_grad():
         for data in test_loader:
-            data *= 255 # scale back up
-            data += torch.rand_like(data.size()) # dequantization
+            data = process(data)
             data = data.to(device)
             z, logdet = model(data)
-            test_loss += loss_function(z, logdet).item()
+            test_loss += loss_function(z, logdet).item() / np.log(2)
 
     test_loss /= len(test_loader.dataset)
     print('====> Test set loss: {:.4f}'.format(test_loss))
@@ -170,8 +175,8 @@ for epoch in range(1, args.epochs + 1):
 
     if not args.nosamples:
         with torch.no_grad():
-            sample = torch.randn(RED_SIZE, *model.latent_size).to(device)
-            sample = model.sample(sample).cpu() / 256
+            sample = torch.randn(64, *model.latent_size).to(device)
+            sample = model.sample(sample).cpu() / 4
             save_image(sample,
                        join(flow_dir, 'samples/sample_' + str(epoch) + '.png'))
 

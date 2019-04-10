@@ -52,15 +52,15 @@ class Preprocess(nn.Module):
         self.alpha = 0.05
 
     def forward(self, x, logdet):
-        x = self.alpha + (1 - self.alpha) * x / 256
+        x = self.alpha + (1 - self.alpha) * x / 4
         x = self._logit(x)
         logdet += (-F.logsigmoid(x) - torch.log(1 - torch.sigmoid(x)) + \
-                   np.log(1 - self.alpha) - np.log(256)).view(x.size(0), -1).sum(-1)
+                   np.log(1 - self.alpha) - np.log(4)).view(x.size(0), -1).sum(-1)
 
         return x, logdet
 
     def inverse(self, y):
-        x = (torch.sigmoid(y) - self.alpha) * 256 / (1 - self.alpha)
+        x = (torch.sigmoid(y) - self.alpha) * 4 / (1 - self.alpha)
         return x
 
     def _logit(self, x):
@@ -234,17 +234,58 @@ class ResNet(nn.Module):
         out = self.conv2(out)
         return out
 
+class RealNVP(nn.Module):
+    def __init__(self):
+        super(RealNVP, self).__init__()
+        self.model = nn.ModuleList()
+
+        self.model.append(Preprocess())
+        self.create_affine_block(4, 'checkerboard', 3)
+        self.model.append(ChannelSqueeze(reverse=False))
+        self.create_affine_block(3, 'channel', 12)
+        self.create_affine_block(3, 'checkerboard', 12)
+        self.model.append(ChannelSqueeze(reverse=False))
+        self.create_affine_block(3, 'channel', 48)
+        self.create_affine_block(3, 'checkerboard', 48)
+
+    def create_affine_block(self, n, type, in_channels):
+        mask = create_mask(type, in_channels)
+        init = lambda: ResNet(in_channels)
+        for i in range(n):
+            if i % 2 == 0:
+                layer_mask = mask
+            else:
+                layer_mask = 1 - mask
+            self.model.append(ActNorm(in_channels, 4))
+            self.model.append(AffineCoupling(in_channels, init,
+                                             mask=layer_mask))
+
+    def forward(self, x):
+        out, logdet = x, 0
+        for layer in self.model:
+            out, logdet = layer(out, logdet)
+        return out, logdet
+
+    def sample(self, z):
+        out = z
+        for layer in reversed(self.model):
+            out = layer.inverse(out)
+        return out
+
+
 class Glow(nn.Module):
     def __init__(self):
         super(Glow, self).__init__()
         self.model = nn.ModuleList()
 
         self.model.append(Preprocess())
-        self.create_affine_block(2, 'channel', 3)
+        self.create_affine_block(3, 'channel', 3)
         self.model.append(ChannelSqueeze(reverse=False))
-        self.create_affine_block(2, 'channel', 12)
+        self.create_affine_block(3, 'channel', 12)
+        self.create_affine_block(3, 'channel', 12)
         self.model.append(ChannelSqueeze(reverse=False))
-        self.create_affine_block(2, 'channel', 48)
+        self.create_affine_block(3, 'channel', 48)
+        self.create_affine_block(3, 'channel', 48)
 
         self.latent_size = None
 
