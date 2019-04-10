@@ -5,7 +5,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-C, H, W = 3, 64, 64
+from utils.misc import ASIZE, RED_SIZE
+
+C, H, W = ASIZE, RED_SIZE, RED_SIZE
 
 def torch_mean(x, dims, keepdim=False):
     dims = sorted(dims, reverse=True)
@@ -50,15 +52,15 @@ class Preprocess(nn.Module):
         self.alpha = 0.05
 
     def forward(self, x, logdet):
-        x = self.alpha + (1 - self.alpha) * x / 4
+        x = self.alpha + (1 - self.alpha) * x / 256
         x = self._logit(x)
         logdet += (-F.logsigmoid(x) - torch.log(1 - torch.sigmoid(x)) + \
-                   np.log(1 - self.alpha) - np.log(4)).view(x.size(0), -1).sum(-1)
+                   np.log(1 - self.alpha) - np.log(256)).view(x.size(0), -1).sum(-1)
 
         return x, logdet
 
     def inverse(self, y):
-        x = (torch.sigmoid(y) - self.alpha) * 4 / (1 - self.alpha)
+        x = (torch.sigmoid(y) - self.alpha) * 256 / (1 - self.alpha)
         return x
 
     def _logit(self, x):
@@ -233,17 +235,18 @@ class ResNet(nn.Module):
         return out
 
 class Glow(nn.Module):
-    def __init__(self, prior):
+    def __init__(self):
         super(Glow, self).__init__()
         self.model = nn.ModuleList()
 
-        self.prior = prior
         self.model.append(Preprocess())
         self.create_affine_block(2, 'channel', 3)
         self.model.append(ChannelSqueeze(reverse=False))
         self.create_affine_block(2, 'channel', 12)
         self.model.append(ChannelSqueeze(reverse=False))
         self.create_affine_block(2, 'channel', 48)
+
+        self.latent_size = None
 
     def create_affine_block(self, n, type, in_channels):
         mask = create_mask(type, in_channels)
@@ -258,6 +261,10 @@ class Glow(nn.Module):
         out, logdet = x, 0
         for layer in self.model:
             out, logdet = layer(out, logdet)
+
+        if self.latent_size is None:
+            self.latent_size = out.size()[1:]
+
         return out, logdet
 
     def sample(self, z):
