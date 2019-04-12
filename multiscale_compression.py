@@ -2,6 +2,7 @@ import argparse
 
 parser = argparse.ArgumentParser(description='Multiscale Compression')
 parser.add_argument('--levels', type=int, default=4)
+parser.add_argument('--logdir', type=str, defualt='multiscale_glow')
 
 args = parser.parse_args()
 cuda = torch.cuda.is_available()
@@ -29,25 +30,6 @@ dataset = RolloutObservationDataset('datasets/carracing', transform_test,
                                     train=False)
 data_loader = torch.utils.data.DataLoader(dataset, batch_size=10,
                                           shuffle=True)
-flow_dir = join('logs', args.logdir)
-assert exists(flow_dir), 'Directory does not exist'.format(flow_dir)
-reload_file = join(flow_dir, 'best.tar')
-assert exists(reload_file, 'File does not exist'.format(reload_file))
-
-states = torch.load(reload_file)
-model.load_state_dict(state['state_dict'])
-
-transform_test = transforms.Compose([
-    transforms.ToPILImage(),
-    transforms.Resize((RED_SIZE, RED_SIZE)),
-    transforms.ToTensor(),
-])
-
-dataset = RolloutObservationDataset('datasets/carracing', transform_test,
-                                    train=False)
-data_loader = torch.utils.data.DataLoader(dataset, batch_size=10,
-                                          shuffle=True)
-
 def process(data):
     data *= 255
     data = torch.floor(data / 64)
