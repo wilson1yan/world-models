@@ -40,7 +40,7 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
         self.conv1 = nn.Conv2d(img_channels, 32, 4, stride=2)
         self.conv2 = nn.Conv2d(32, 64, 4, stride=2)
         self.conv3 = nn.Conv2d(64, 128, 4, stride=2)
-        self.conv4 = nn.Conv2d(128, 256, 4, stride=2)
+        self.conv4 = nn.Conv2d(128, 256, 2, stride=2)
 
         self.fc_mu = nn.Linear(2*2*256, latent_size)
         self.fc_logsigma = nn.Linear(2*2*256, latent_size)

@@ -7,12 +7,13 @@ import numpy as np
 import torch
 import torch.utils.data
 from torch import optim
+import torch.nn as nn
 from torch.nn import functional as F
 from torch.distributions.normal import Normal
 from torchvision import transforms
 from torchvision.utils import save_image
 
-from models.flow import Glow, RealNVP
+from models.flow import Glow, RealNVP, MultiscaleGlow
 
 from utils.misc import save_checkpoint
 from utils.misc import RED_SIZE, ASIZE
@@ -22,7 +23,7 @@ from utils.learning import ReduceLROnPlateau
 from data.loaders import RolloutObservationDataset
 
 parser = argparse.ArgumentParser(description='Flow Trainer')
-parser.add_argument('--batch-size', type=int, default=32, metavar='N',
+parser.add_argument('--batch-size', type=int, default=64, metavar='N',
                     help='input batch size for training (default: 32)')
 parser.add_argument('--epochs', type=int, default=50, metavar='N',
                     help='number of epochs to train (default: 50)')
@@ -36,6 +37,7 @@ parser.add_argument('--nosamples', action='store_true',
 args = parser.parse_args()
 cuda = torch.cuda.is_available()
 
+BATCH = 32
 
 torch.manual_seed(123)
 # Fix numeric divergence due to bug in Cudnn
@@ -68,8 +70,8 @@ test_loader = torch.utils.data.DataLoader(
 
 N = ASIZE * RED_SIZE * RED_SIZE
 prior = Normal(0, 1)
-model = Glow().to(device)
-optimizer = optim.Adam(model.parameters(), lr=5e-4)
+model = MultiscaleGlow().to(device)
+optimizer = optim.Adam(model.parameters(), lr=1e-3)
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
 
@@ -96,11 +98,21 @@ def train(epoch):
     for batch_idx, data in enumerate(train_loader):
         data = process(data)
         data = data.to(device)
+
+        # x_rec = model.sample(model(data[[0]])[0])
+        # print('Invert error', torch.max(torch.abs(x_rec - data[[0]])))
+
         optimizer.zero_grad()
-        z, logdet = model(data)
-        loss = loss_function(z, logdet)
-        loss.backward()
-        train_loss += loss.item() / np.log(2)
+        for i in range(0, data.size(0), BATCH):
+            z, logdet = model(data[i:i+BATCH])
+
+            loss = loss_function(z, logdet)
+            loss.backward()
+            train_loss += loss.item() / np.log(2)
+
+        for param in optimizer.param_groups:
+            nn.utils.clip_grad_norm_(param['params'], 1, 2)
+
         optimizer.step()
         if batch_idx % 20 == 0:
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
@@ -121,15 +133,17 @@ def test():
         for data in test_loader:
             data = process(data)
             data = data.to(device)
-            z, logdet = model(data)
-            test_loss += loss_function(z, logdet).item() / np.log(2)
+            for i in range(0, data.size(0), BATCH):
+                z, logdet = model(data[i:i+BATCH])
+                test_loss += loss_function(z, logdet).item() / np.log(2)
 
     test_loss /= len(test_loader.dataset)
     print('====> Test set loss: {:.4f}'.format(test_loss))
     return test_loss
 
 # check flow dir exists, if not, create it
-flow_dir = join(args.logdir, 'flow')
+# flow_dir = join(args.logdir, 'flow')
+flow_dir = join('logs', args.logdir)
 if not exists(flow_dir):
     mkdir(flow_dir)
     mkdir(join(flow_dir, 'samples'))

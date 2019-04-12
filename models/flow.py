@@ -23,10 +23,10 @@ def torch_sum(x, dims, keepdim=False):
     return x
 
 
-def create_mask(type, channels):
+def create_mask(type, channels, reduction_id):
     assert type in ['checkerboard', 'channel', 'bad']
 
-    w = h = int(np.sqrt(C * H * W / channels))
+    w = h = int(np.sqrt(C * H * W / channels / (2 ** reduction_id)))
 
     if type == 'checkerboard':
         re = np.r_[w // 2 * [0, 1]]
@@ -93,9 +93,9 @@ class InvertibleConv(nn.Module):
 
 
 class AffineCoupling(nn.Module):
-    def __init__(self, in_channels, init, mask=None):
+    def __init__(self, in_channels, init, reduction=0, mask=None):
         super(AffineCoupling, self).__init__()
-        w = h = int(np.sqrt(C * W * H / in_channels))
+        w = h = int(np.sqrt(C * W * H / in_channels / (2 ** reduction)))
         self.register_buffer('mask', torch.zeros((1, in_channels, w, h)))
         self.model = init()
         self.scale = nn.Parameter(torch.ones(1, in_channels, 1, 1))
@@ -240,16 +240,18 @@ class RealNVP(nn.Module):
         self.model = nn.ModuleList()
 
         self.model.append(Preprocess())
-        self.create_affine_block(4, 'checkerboard', 3)
+        self.create_affine_block(2, 'checkerboard', 3)
         self.model.append(ChannelSqueeze(reverse=False))
-        self.create_affine_block(3, 'channel', 12)
-        self.create_affine_block(3, 'checkerboard', 12)
+        self.create_affine_block(2, 'channel', 12)
+        self.create_affine_block(2, 'checkerboard', 12)
         self.model.append(ChannelSqueeze(reverse=False))
-        self.create_affine_block(3, 'channel', 48)
-        self.create_affine_block(3, 'checkerboard', 48)
+        self.create_affine_block(2, 'channel', 48)
+        self.create_affine_block(2, 'checkerboard', 48)
+
+        self.latent_size = None
 
     def create_affine_block(self, n, type, in_channels):
-        mask = create_mask(type, in_channels)
+        mask = create_mask(type, in_channels, 0)
         init = lambda: ResNet(in_channels)
         for i in range(n):
             if i % 2 == 0:
@@ -264,6 +266,10 @@ class RealNVP(nn.Module):
         out, logdet = x, 0
         for layer in self.model:
             out, logdet = layer(out, logdet)
+
+        if self.latent_size is None:
+            self.latent_size = out.size()[1:]
+
         return out, logdet
 
     def sample(self, z):
@@ -282,15 +288,13 @@ class Glow(nn.Module):
         self.create_affine_block(3, 'channel', 3)
         self.model.append(ChannelSqueeze(reverse=False))
         self.create_affine_block(3, 'channel', 12)
-        self.create_affine_block(3, 'channel', 12)
         self.model.append(ChannelSqueeze(reverse=False))
-        self.create_affine_block(3, 'channel', 48)
         self.create_affine_block(3, 'channel', 48)
 
         self.latent_size = None
 
     def create_affine_block(self, n, type, in_channels):
-        mask = create_mask(type, in_channels)
+        mask = create_mask(type, in_channels, 0)
         init = lambda: ResNet(in_channels)
         for _ in range(n):
             self.model.append(ActNorm(in_channels, 4))
@@ -313,3 +317,107 @@ class Glow(nn.Module):
         for layer in reversed(self.model):
             out = layer.inverse(out)
         return out
+
+class SqueezeSplit(nn.Module):
+    def __init__(self, n, channel_size, reduction_id):
+        super(SqueezeSplit, self).__init__()
+        self.reduction_id = reduction_id
+        self.model = nn.ModuleList()
+        self.model.append(ChannelSqueeze(reverse=False))
+        channel_size *= 4
+        self.create_affine_block(n, 'channel', channel_size)
+
+    def create_affine_block(self, n, type, in_channels):
+        mask = create_mask(type, in_channels, self.reduction_id)
+        init = lambda: ResNet(in_channels)
+        for _ in range(n):
+            self.model.append(ActNorm(in_channels, 4))
+            self.model.append(InvertibleConv(in_channels))
+            self.model.append(AffineCoupling(in_channels, init,
+                                             reduction=self.reduction_id,
+                                             mask=mask))
+
+    def forward(self, x, logdet):
+        out = x
+        for layer in self.model:
+            out, logdet = layer(out, logdet)
+        z1, z2 = out.chunk(2, dim=1)
+        return z1, z2, logdet
+
+    def inverse(self, z1, z2):
+        z = torch.cat((z1, z2), dim=1)
+        for layer in reversed(self.model):
+            z = layer.inverse(z)
+        return z
+
+class MultiscaleGlow(nn.Module):
+    def __init__(self, n_scale=3, n_blocks=6):
+        super(MultiscaleGlow, self).__init__()
+        self.n_scale = n_scale
+
+        self.preprocess = Preprocess()
+        self.multiscale_layers = nn.ModuleList()
+
+        channel_size = 3
+        for i in range(n_scale):
+            self.multiscale_layers.append(SqueezeSplit(n_blocks, channel_size, i))
+            channel_size *= 2
+
+        self.output_layers = nn.ModuleList()
+        self.output_layers.append(ChannelSqueeze(reverse=False))
+        channel_size *= 4
+        self.create_affine_block(n_blocks, 'channel', channel_size, self.output_layers)
+
+        self.latent_size = None
+        self.multiscale_sizes = None
+        self.multiscale_totals = None
+
+    def create_affine_block(self, n, type, in_channels, module_list):
+        mask = create_mask(type, in_channels, self.n_scale)
+        init = lambda: ResNet(in_channels)
+        for _ in range(n):
+            module_list.append(ActNorm(in_channels, 4))
+            module_list.append(InvertibleConv(in_channels))
+            module_list.append(AffineCoupling(in_channels, init,
+                                              reduction=self.n_scale,
+                                              mask=mask))
+
+    def forward(self, x):
+        out, logdet = x, 0
+        out, logdet = self.preprocess(out, logdet)
+
+        zs = []
+        for multiscale in self.multiscale_layers:
+            z, out, logdet = multiscale(out, logdet)
+            zs.append(z)
+
+        for output_layer in self.output_layers:
+            out, logdet = output_layer(out, logdet)
+
+        zs.append(out)
+        final_z = torch.cat([z.view(z.size(0), -1) for z in zs], dim=1)
+
+        if self.latent_size is None:
+            self.multiscale_sizes = [z.size()[1:] for z in zs]
+            self.multiscale_totals = [np.prod(s) for s in self.multiscale_sizes]
+            self.latent_size = final_z.size()[1:]
+
+        return final_z, logdet
+
+    def sample(self, z):
+        cum_sum = np.cumsum(self.multiscale_totals)
+        zs = []
+        lower = 0
+        for i in range(self.n_scale + 1):
+            zs.append(z[:,lower:cum_sum[i]].view(z.size(0), *self.multiscale_sizes[i]))
+            lower = cum_sum[i]
+
+        last_z = zs[-1]
+        for output_layer in reversed(self.output_layers):
+            last_z = output_layer.inverse(last_z)
+
+        for first_z, layer in zip(reversed(zs[:-1]), reversed(self.multiscale_layers)):
+            last_z = layer.inverse(first_z, last_z)
+
+        last_z = self.preprocess.inverse(last_z)
+        return last_z
