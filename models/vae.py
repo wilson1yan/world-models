@@ -50,24 +50,22 @@ class Decoder(nn.Module):
         self.img_channels = img_channels
 
         self.fc1 = nn.Linear(latent_size, 1024)
-        self.deconv1 = nn.ConvTranspose2d(1024, 128, 5, stride=2)
-        self.deconv2 = nn.ConvTranspose2d(128, 64, 5, stride=2)
-        self.deconv3 = nn.ConvTranspose2d(64, 32, 6, stride=2)
-        self.deconv4 = nn.ConvTranspose2d(32, img_channels, 6, stride=2)
 
-        self.conv_layers = nn.Sequential(
-            ResidualStack(128, n_blocks=2),
+        self.deconv_layers = nn.Sequential(
+            nn.Conv2d(64, 128, 3, padding=1),
             nn.ReLU(),
-            nn.ConvTranspose2d(128, 128, 4, stride=2, padding=1)
+            ResidualStack(128, n_blocks=3),
             nn.ConvTranspose2d(128, 128, 4, stride=2, padding=1),
             nn.ReLU(),
-            nn.ConvTranspose2d(128, 6, 4, stride=2, padding=1)
+            nn.ConvTranspose2d(128, 64, 4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(64, img_channels, 4, stride=2, padding=1)
         )
 
     def forward(self, x): # pylint: disable=arguments-differ
         x = F.relu(self.fc1(x))
         x = x.view(x.size(0), 64, 4, 4)
-        reconstruction = F.sigmoid(self.conv_layers(x))
+        reconstruction = F.sigmoid(self.deconv_layers(x))
         return reconstruction
 
 class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
@@ -75,21 +73,21 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
     def __init__(self, img_channels, latent_size):
         super(Encoder, self).__init__()
         self.latent_size = latent_size
+        #self.img_size = img_size
         self.img_channels = img_channels
 
         self.conv_layers = nn.Sequential(
-            nn.Conv2d(img_channels, 128, 4, stride=2),
+            nn.Conv2d(img_channels, 128, 3, padding=1, stride=2),
             nn.ReLU(),
-            nn.Conv2d(128, 128, 4, stride=2),
+            nn.Conv2d(128, 128, 3, padding=1, stride=2),
             nn.ReLU(),
-            nn.Conv2d(128, 128, 4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, 3, padding=1),
+            nn.Conv2d(128, 128, 3, padding=1, stride=2),
             ResidualStack(128, n_blocks=2, tail=True)
         )
 
         self.fc_mu = nn.Linear(4*4*128, latent_size)
-        self.fc_logsigma = nn.Linear(2*2*256, latent_size)
+        self.fc_logsigma = nn.Linear(4*4*128, latent_size)
+
 
     def forward(self, x): # pylint: disable=arguments-differ
         x = self.conv_layers(x)

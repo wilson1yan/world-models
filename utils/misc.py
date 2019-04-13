@@ -13,7 +13,7 @@ gym.envs.box2d.car_racing.STATE_W, gym.envs.box2d.car_racing.STATE_H = 64, 64
 
 # Hardcoded for now
 ASIZE, LSIZE, RSIZE, RED_SIZE, SIZE =\
-    3, 32, 256, 32, 64
+    3, 256, 256, 32, 64
 
 # Same
 transform = transforms.Compose([

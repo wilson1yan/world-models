@@ -66,7 +66,7 @@ test_loader = torch.utils.data.DataLoader(
 
 
 model = VAE(3, LSIZE).to(device)
-optimizer = optim.Adam(model.parameters())
+optimizer = optim.Adam(model.parameters(), lr=2.5e-3)
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
 
@@ -168,7 +168,7 @@ for epoch in range(1, args.epochs + 1):
 
     if not args.nosamples:
         with torch.no_grad():
-            sample = torch.randn(RED_SIZE, LSIZE).to(device)
+            sample = torch.randn(64, LSIZE).to(device)
             sample = model.decoder(sample).cpu()
             save_image(sample.view(64, 3, RED_SIZE, RED_SIZE),
                        join(vae_dir, 'samples/sample_' + str(epoch) + '.png'))
