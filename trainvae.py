@@ -66,7 +66,7 @@ test_loader = torch.utils.data.DataLoader(
 
 
 model = VAE(3, LSIZE).to(device)
-optimizer = optim.Adam(model.parameters(), lr=2.5e-3)
+optimizer = optim.Adam(model.parameters())
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
 

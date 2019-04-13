@@ -54,7 +54,7 @@ class Decoder(nn.Module):
         self.deconv_layers = nn.Sequential(
             nn.Conv2d(64, 128, 3, padding=1),
             nn.ReLU(),
-            ResidualStack(128, n_blocks=3),
+            # ResidualStack(128, n_blocks=3),
             nn.ConvTranspose2d(128, 128, 4, stride=2, padding=1),
             nn.ReLU(),
             nn.ConvTranspose2d(128, 64, 4, stride=2, padding=1),
@@ -82,7 +82,7 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
             nn.Conv2d(128, 128, 3, padding=1, stride=2),
             nn.ReLU(),
             nn.Conv2d(128, 128, 3, padding=1, stride=2),
-            ResidualStack(128, n_blocks=2, tail=True)
+            # ResidualStack(128, n_blocks=2, tail=True)
         )
 
         self.fc_mu = nn.Linear(4*4*128, latent_size)
