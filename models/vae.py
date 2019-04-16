@@ -96,7 +96,7 @@ class PixelVAE(nn.Module):
                 out = self.pixel_cnn(images, z)
                 for channel in range(3):
                     probs = F.softmax(out[:, :, channel, r, c], 1).data
-                    pixel_sample = torch.multinomial(probs, 1).float() / (N_COLOR_DIM - 1)
+                    pixel_sample = torch.multinomial(probs, 1).float() / (self.n_color_dim - 1)
                     images[:, :, r, c] = pixel_sample
         return images
 

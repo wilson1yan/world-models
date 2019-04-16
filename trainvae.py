@@ -31,7 +31,7 @@ parser.add_argument('--noreload', action='store_true',
                     help='Best model is not reloaded if specified')
 parser.add_argument('--nosamples', action='store_true',
                     help='Does not save samples during training if specified')
-parser.add_argument('--beta', type=float, default=1,
+parser.add_argument('--beta', type=int, default=1,
                    help='beta for beta-VAE')
 parser.add_argument('--model', type=str, default='vae')
 
@@ -79,7 +79,7 @@ elif args.model == 'pixel_vae':
 else:
     raise Exception('Invalid model {}'.format(args.model))
 
-optimizer = optim.Adam(model.parameters(), lr=np.sqrt(args.batch_size / 32) * 1e-3)
+optimizer = optim.Adam(model.parameters(), lr=np.sqrt(args.batch_size / 32) * 5e-4)
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
 
@@ -88,7 +88,8 @@ def loss_function(recon_x, x, mu, logsigma):
     """ VAE loss function """
     if args.model == 'pixel_vae':
         target = (x * (N_COLOR_DIM - 1)).long()
-        BCE = F.cross_entropy(recon_x, target)
+        BCE = F.cross_entropy(recon_x, target, reduce=False).view(x.size(0), -1).sum(-1)
+        BCE = BCE.mean()
     else:
         BCE = F.mse_loss(recon_x, x, size_average=False)
 

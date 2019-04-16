@@ -41,7 +41,7 @@ class PixelCNN(nn.Module):
         input_size = x.size()[1:]
 
         x = self.first_layer(x)
-        if cond:
+        if cond is not None:
             x = torch.cat((x, cond), dim=1)
         for block in self.residual_blocks:
             x = block(x) + x
