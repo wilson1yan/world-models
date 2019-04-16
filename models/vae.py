@@ -89,16 +89,7 @@ class PixelVAE(nn.Module):
 
     def sample(self, z):
         z = self.decoder(z)
-        images = torch.zeros_like(z)
-
-        for r in range(images.size(2)):
-            for c in range(images.size(3)):
-                out = self.pixel_cnn(images, z)
-                for channel in range(3):
-                    probs = F.softmax(out[:, :, channel, r, c], 1).data
-                    pixel_sample = torch.multinomial(probs, 1).float() / (self.n_color_dim - 1)
-                    images[:, :, r, c] = pixel_sample
-        return images
+        return self.pixel_cnn.sample(cond=z)
 
     def forward(self, x):
         mu, logsigma = self.encoder(x)

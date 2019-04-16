@@ -27,15 +27,34 @@ class MaskConv2d(nn.Conv2d):
         return mask
 
 class PixelCNN(nn.Module):
-    def __init__(self, img_channels, n_color_dim):
+    def __init__(self, img_channels, n_color_dim, n_blocks=5, cond=True):
         super(PixelCNN, self).__init__()
-        conv = MaskConv2d('A', img_channels, 128 - img_channels, 7, padding=3)
+        if cond:
+            conv = MaskConv2d('A', img_channels, 128 - img_channels, 7, padding=3)
+        else:
+            conv = MaskConv2d('A', img_channels, 128, 7, padding=3)
         residual_blocks = nn.ModuleList([self.build_residual_block()
-                                         for _ in range(5)])
+                                         for _ in range(n_blocks)])
         self.first_layer = nn.Sequential(conv, nn.ReLU())
         self.residual_blocks = nn.ModuleList(residual_blocks)
         self.out = nn.Sequential(nn.Conv2d(128, 256, 1), nn.ReLU(),
                                  nn.Conv2d(256, img_channels * n_color_dim, 1))
+        self._image_shape = (img_channels, 64, 64)
+        self.n_color_dim = n_color_dim
+
+    def sample(self, cond=None):
+        if cond is None:
+            images = torch.zeros((64,) + self._image_shape).cuda()
+        else:
+            images = torch.zeros_like(cond)
+
+        for r in range(images.size(2)):
+            for c in range(images.size(3)):
+                out = self(images, cond=cond)
+                for channel in range(3):
+                    probs = F.softmax(out[:, :, channel, r, c], 1).data
+                    pixel_sample = torch.multinomial(probs, 1).float() / (self.n_color_dim - 1)
+                    images[:, :, r, c] = pixel_sample
 
     def forward(self, x, cond=None):
         input_size = x.size()[1:]
