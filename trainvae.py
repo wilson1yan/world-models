@@ -3,6 +3,8 @@ import argparse
 from os.path import join, exists
 from os import mkdir
 
+import numpy as np
+
 import torch
 import torch.utils.data
 from torch import optim
@@ -75,7 +77,7 @@ elif args.model == 'pixel_vae':
 else:
     raise Exception('Invalid model {}'.format(args.model))
 
-optimizer = optim.Adam(model.parameters())
+optimizer = optim.Adam(model.parameters(), lr=np.sqrt(args.batch_size / 32) * 1e-3)
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
 
