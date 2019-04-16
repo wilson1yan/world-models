@@ -7,40 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class ResidualBlock(nn.Module):
-
-    def __init__(self, in_channels, n_filters):
-        super(ResidualBlock, self).__init__()
-        self.in_channels = in_channels
-        self.n_filters = n_filters
-
-        self.model = []
-        self.model.append(nn.ReLU())
-        self.model.append(nn.Conv2d(in_channels, n_filters, 3, padding=1))
-        self.model.append(nn.ReLU())
-        self.model.append(nn.Conv2d(n_filters, n_filters, 1))
-        self.model.append(nn.ReLU())
-        self.model.append(nn.Conv2d(n_filters, in_channels, 3, padding=1))
-
-        self.model = nn.Sequential(*self.model)
-
-    def forward(self, x):
-        out = self.model(x)
-        return out + x
-
-class ResidualStack(nn.Module):
-    def __init__(self, in_channels, n_filters=64, n_blocks=5, tail=False):
-        super(ResidualStack, self).__init__()
-        self.n_blocks = n_blocks
-        self.model = []
-        for _ in range(n_blocks):
-            self.model.append(ResidualBlock(in_channels, n_filters))
-        if not tail:
-            self.model.append(nn.ReLU())
-        self.model = nn.Sequential(*self.model)
-
-    def forward(self, x):
-        return self.model(x)
+from models.pixel_cnn import PixelCNN
 
 class Decoder(nn.Module):
     """ VAE decoder """
@@ -50,22 +17,18 @@ class Decoder(nn.Module):
         self.img_channels = img_channels
 
         self.fc1 = nn.Linear(latent_size, 1024)
-
-        self.deconv_layers = nn.Sequential(
-            nn.Conv2d(64, 128, 3, padding=1),
-            nn.ReLU(),
-            # ResidualStack(128, n_blocks=3),
-            nn.ConvTranspose2d(128, 128, 4, stride=2, padding=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(128, 64, 4, stride=2, padding=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(64, img_channels, 4, stride=2, padding=1)
-        )
+        self.deconv1 = nn.ConvTranspose2d(1024, 128, 5, stride=2)
+        self.deconv2 = nn.ConvTranspose2d(128, 64, 5, stride=2)
+        self.deconv3 = nn.ConvTranspose2d(64, 32, 6, stride=2)
+        self.deconv4 = nn.ConvTranspose2d(32, img_channels, 6, stride=2)
 
     def forward(self, x): # pylint: disable=arguments-differ
         x = F.relu(self.fc1(x))
-        x = x.view(x.size(0), 64, 4, 4)
-        reconstruction = F.sigmoid(self.deconv_layers(x))
+        x = x.unsqueeze(-1).unsqueeze(-1)
+        x = F.relu(self.deconv1(x))
+        x = F.relu(self.deconv2(x))
+        x = F.relu(self.deconv3(x))
+        reconstruction = self.deconv4(x)
         return reconstruction
 
 class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
@@ -76,21 +39,20 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
         #self.img_size = img_size
         self.img_channels = img_channels
 
-        self.conv_layers = nn.Sequential(
-            nn.Conv2d(img_channels, 128, 3, padding=1, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, 3, padding=1, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, 3, padding=1, stride=2),
-            # ResidualStack(128, n_blocks=2, tail=True)
-        )
+        self.conv1 = nn.Conv2d(img_channels, 32, 4, stride=2)
+        self.conv2 = nn.Conv2d(32, 64, 4, stride=2)
+        self.conv3 = nn.Conv2d(64, 128, 4, stride=2)
+        self.conv4 = nn.Conv2d(128, 256, 4, stride=2)
 
-        self.fc_mu = nn.Linear(4*4*128, latent_size)
-        self.fc_logsigma = nn.Linear(4*4*128, latent_size)
+        self.fc_mu = nn.Linear(2*2*256, latent_size)
+        self.fc_logsigma = nn.Linear(2*2*256, latent_size)
 
 
     def forward(self, x): # pylint: disable=arguments-differ
-        x = self.conv_layers(x)
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = F.relu(self.conv4(x))
         x = x.view(x.size(0), -1)
 
         mu = self.fc_mu(x)
@@ -105,11 +67,40 @@ class VAE(nn.Module):
         self.encoder = Encoder(img_channels, latent_size)
         self.decoder = Decoder(img_channels, latent_size)
 
-    def forward(self, x): # pylint: disable=arguments-differ
+    def sample(self, z):
+        return torch.sigmoid(self.decoder(z))
+
+    def forward(self, x):
         mu, logsigma = self.encoder(x)
         sigma = logsigma.exp()
         eps = torch.randn_like(sigma)
         z = eps.mul(sigma).add_(mu)
 
-        recon_x = self.decoder(z)
+        recon_x = F.sigmoid(self.decoder(z))
+        return recon_x, mu, logsigma
+
+class PixelVAE(nn.Module):
+    def __init__(self, img_channels, latent_size):
+        super(PixelVAE, self).__init__()
+        self.encoder = Encoder(img_channels, latent_size)
+        self.decoder = Decoder(img_channels, latent_size)
+        self.pixel_cnn = PixelCNN(img_channels)
+
+    def sample(self, z):
+        z = self.decoder(z)
+        images = torch.zeros_like(z)
+
+        for r in range(images.size(2)):
+            for c in range(images.size(3)):
+                out = self.pixel_cnn(images, z)
+                images[:, :, r, c] = torch.sigmoid(out[:, :, r, c])
+        return images
+
+    def forward(self, x):
+        mu, logsigma = self.encoder(x)
+        sigma = logsigma.exp()
+        eps = torch.randn_like(sigma)
+        z = eps.mul(sigma).add_(mu)
+        z = self.decoder(z)
+        recon_x = torch.sigmoid(self.pixel_cnn(x, z))
         return recon_x, mu, logsigma

@@ -10,7 +10,7 @@ from torch.nn import functional as F
 from torchvision import transforms
 from torchvision.utils import save_image
 
-from models.vae import VAE
+from models.vae import VAE, PixelVAE
 
 from utils.misc import save_checkpoint
 from utils.misc import LSIZE, RED_SIZE
@@ -29,9 +29,13 @@ parser.add_argument('--noreload', action='store_true',
                     help='Best model is not reloaded if specified')
 parser.add_argument('--nosamples', action='store_true',
                     help='Does not save samples during training if specified')
+parser.add_argument('--beta', type=float, default=1,
+                   help='beta for beta-VAE')
+parser.add_argument('--model', type=str, default='vae')
 
 
 args = parser.parse_args()
+beta = args.beta
 cuda = torch.cuda.is_available()
 
 
@@ -64,8 +68,13 @@ train_loader = torch.utils.data.DataLoader(
 test_loader = torch.utils.data.DataLoader(
     dataset_test, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
+if args.model == 'vae':
+    model = VAE(3, LSIZE).to(device)
+elif args.model == 'pixel_vae':
+    model = PixelVAE(3, LSIZE).to(device)
+else:
+    raise Exception('Invalid model {}'.format(args.model))
 
-model = VAE(3, LSIZE).to(device)
 optimizer = optim.Adam(model.parameters())
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
@@ -80,7 +89,7 @@ def loss_function(recon_x, x, mu, logsigma):
     # https://arxiv.org/abs/1312.6114
     # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
     KLD = -0.5 * torch.sum(1 + 2 * logsigma - mu.pow(2) - (2 * logsigma).exp())
-    return BCE + KLD
+    return BCE + beta * KLD
 
 
 def train(epoch):
@@ -122,7 +131,7 @@ def test():
     return test_loss
 
 # check vae dir exists, if not, create it
-vae_dir = join(args.logdir, 'vae')
+vae_dir = join(args.logdir, '{}_beta{}'.format(args.model, beta))
 if not exists(vae_dir):
     mkdir(vae_dir)
     mkdir(join(vae_dir, 'samples'))
@@ -167,9 +176,10 @@ for epoch in range(1, args.epochs + 1):
 
 
     if not args.nosamples:
+        print("Sampling")
         with torch.no_grad():
-            sample = torch.randn(64, LSIZE).to(device)
-            sample = model.decoder(sample).cpu()
+            sample = torch.randn(RED_SIZE, LSIZE).to(device)
+            sample = model.sample(sample).cpu()
             save_image(sample.view(64, 3, RED_SIZE, RED_SIZE),
                        join(vae_dir, 'samples/sample_' + str(epoch) + '.png'))
 
