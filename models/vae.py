@@ -80,11 +80,12 @@ class VAE(nn.Module):
         return recon_x, mu, logsigma
 
 class PixelVAE(nn.Module):
-    def __init__(self, img_channels, latent_size):
+    def __init__(self, img_channels, latent_size, n_color_dim):
         super(PixelVAE, self).__init__()
         self.encoder = Encoder(img_channels, latent_size)
         self.decoder = Decoder(img_channels, latent_size)
-        self.pixel_cnn = PixelCNN(img_channels)
+        self.pixel_cnn = PixelCNN(img_channels, n_color_dim)
+        self.n_color_dim = n_color_dim
 
     def sample(self, z):
         z = self.decoder(z)
@@ -93,7 +94,10 @@ class PixelVAE(nn.Module):
         for r in range(images.size(2)):
             for c in range(images.size(3)):
                 out = self.pixel_cnn(images, z)
-                images[:, :, r, c] = torch.sigmoid(out[:, :, r, c])
+                for channel in range(3):
+                    probs = F.softmax(out[:, :, channel, r, c], 1).data
+                    pixel_sample = torch.multinomial(probs, 1).float() / (N_COLOR_DIM - 1)
+                    images[:, :, r, c] = pixel_sample
         return images
 
     def forward(self, x):
@@ -102,5 +106,5 @@ class PixelVAE(nn.Module):
         eps = torch.randn_like(sigma)
         z = eps.mul(sigma).add_(mu)
         z = self.decoder(z)
-        recon_x = torch.sigmoid(self.pixel_cnn(x, z))
+        recon_x = self.pixel_cnn(x, z)
         return recon_x, mu, logsigma

@@ -27,7 +27,7 @@ class MaskConv2d(nn.Conv2d):
         return mask
 
 class PixelCNN(nn.Module):
-    def __init__(self, img_channels):
+    def __init__(self, img_channels, n_color_dim):
         super(PixelCNN, self).__init__()
         conv = MaskConv2d('A', img_channels, 128 - img_channels, 7, padding=3)
         residual_blocks = nn.ModuleList([self.build_residual_block()
@@ -35,17 +35,18 @@ class PixelCNN(nn.Module):
         self.first_layer = nn.Sequential(conv, nn.ReLU())
         self.residual_blocks = nn.ModuleList(residual_blocks)
         self.out = nn.Sequential(nn.Conv2d(128, 256, 1), nn.ReLU(),
-                                 nn.Conv2d(256, img_channels, 1))
+                                 nn.Conv2d(256, img_channels * n_color_dim, 1))
 
-    def forward(self, x, cond):
+    def forward(self, x, cond=None):
         input_size = x.size()[1:]
 
         x = self.first_layer(x)
-        x = torch.cat((x, cond), dim=1)
+        if cond:
+            x = torch.cat((x, cond), dim=1)
         for block in self.residual_blocks:
             x = block(x) + x
         x = self.out(x)
-        x = x.view(x.size(0), *input_size)
+        x = x.view(x.size(0), 4, *input_size)
         return x
 
     def build_residual_block(self):
@@ -57,18 +58,3 @@ class PixelCNN(nn.Module):
             nn.Conv2d(64, 128, 1),
             nn.ReLU()
         )
-
-    def evaluate(self, data):
-        total_loss = 0
-        for x_batch in np.array_split(data, data.shape[0] // 100):
-            x_in = torch.FloatTensor(x_batch) / 3
-            x_target = torch.LongTensor(x_batch)
-
-            x_in, x_target = x_in.cuda(device), x_target.cuda(device)
-
-            out = self(x_in)
-            loss = F.cross_entropy(out, x_target)
-            loss = loss.cpu().item()
-            loss = loss / np.log(2) * x_batch.shape[0]
-            total_loss += loss
-        return total_loss / data.shape[0]

@@ -41,6 +41,8 @@ beta = args.beta
 cuda = torch.cuda.is_available()
 
 
+N_COLOR_DIM = 4
+
 torch.manual_seed(123)
 # Fix numeric divergence due to bug in Cudnn
 torch.backends.cudnn.benchmark = True
@@ -73,7 +75,7 @@ test_loader = torch.utils.data.DataLoader(
 if args.model == 'vae':
     model = VAE(3, LSIZE).to(device)
 elif args.model == 'pixel_vae':
-    model = PixelVAE(3, LSIZE).to(device)
+    model = PixelVAE(3, LSIZE, N_COLOR_DIM).to(device)
 else:
     raise Exception('Invalid model {}'.format(args.model))
 
@@ -84,7 +86,11 @@ earlystopping = EarlyStopping('min', patience=30)
 # Reconstruction + KL divergence losses summed over all elements and batch
 def loss_function(recon_x, x, mu, logsigma):
     """ VAE loss function """
-    BCE = F.mse_loss(recon_x, x, size_average=False)
+    if args.model == 'pixel_vae':
+        target = (x * (N_COLOR_DIM - 1)).long()
+        BCE = F.cross_entropy(recon_x, target)
+    else:
+        BCE = F.mse_loss(recon_x, x, size_average=False)
 
     # see Appendix B from VAE paper:
     # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
