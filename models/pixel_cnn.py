@@ -54,7 +54,8 @@ class PixelCNN(nn.Module):
                 for channel in range(3):
                     probs = F.softmax(out[:, :, channel, r, c], 1).data
                     pixel_sample = torch.multinomial(probs, 1).float() / (self.n_color_dim - 1)
-                    images[:, :, r, c] = pixel_sample
+                    images[:, channel, r, c] = pixel_sample.squeeze(1)
+        return images
 
     def forward(self, x, cond=None):
         input_size = x.size()[1:]
@@ -65,7 +66,7 @@ class PixelCNN(nn.Module):
         for block in self.residual_blocks:
             x = block(x) + x
         x = self.out(x)
-        x = x.view(x.size(0), 4, *input_size)
+        x = x.view(x.size(0), self.n_color_dim, *input_size)
         return x
 
     def build_residual_block(self):

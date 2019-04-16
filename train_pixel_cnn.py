@@ -87,6 +87,7 @@ def train(epoch):
     model.train()
     dataset_train.load_next_buffer()
     train_loss = 0
+    n_data = 0
     for batch_idx, data in enumerate(train_loader):
         data = data.to(device)
         optimizer.zero_grad()
@@ -100,6 +101,9 @@ def train(epoch):
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader),
                 loss.item() / len(data)))
+        n_data += data.size(0)
+        if n_data >= 100000:
+            break
 
     print('====> Epoch: {} Average loss: {:.4f}'.format(
         epoch, train_loss / len(train_loader.dataset)))
