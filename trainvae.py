@@ -74,8 +74,12 @@ test_loader = torch.utils.data.DataLoader(
 
 if args.model == 'vae':
     model = VAE(3, LSIZE).to(device)
-elif args.model == 'pixel_vae':
-    model = PixelVAE(3, LSIZE, N_COLOR_DIM).to(device)
+elif args.model == 'pixel_vae_c':
+    model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                     N_COLOR_DIM, upsample=False).to(device)
+elif args.model == 'pixel_vae_l':
+    model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                     N_COLOR_DIM, upsample=True).to(device)
 else:
     raise Exception('Invalid model {}'.format(args.model))
 
@@ -86,7 +90,7 @@ earlystopping = EarlyStopping('min', patience=30)
 # Reconstruction + KL divergence losses summed over all elements and batch
 def loss_function(recon_x, x, mu, logsigma):
     """ VAE loss function """
-    if args.model == 'pixel_vae':
+    if args.model.startswith('pixel_vae'):
         target = (x * (N_COLOR_DIM - 1)).long()
         BCE = F.cross_entropy(recon_x, target, reduce=False).view(x.size(0), -1).sum(-1)
         BCE = BCE.mean()
@@ -161,6 +165,14 @@ if not args.noreload and exists(reload_file):
 cur_best = None
 
 for epoch in range(1, args.epochs + 1):
+    if not args.nosamples:
+        with torch.no_grad():
+            sample = torch.randn(16, LSIZE).to(device)
+            sample = model.sample(sample, device).cpu()
+            save_image(sample,
+                       join(vae_dir, 'samples/sample_' + str(epoch - 1) + '.png'),
+                       nrow=4)
+
     train(epoch)
     test_loss = test()
     scheduler.step(test_loss)
@@ -181,16 +193,6 @@ for epoch in range(1, args.epochs + 1):
         'scheduler': scheduler.state_dict(),
         'earlystopping': earlystopping.state_dict()
     }, is_best, filename, best_filename)
-
-
-
-    if not args.nosamples:
-        print("Sampling")
-        with torch.no_grad():
-            sample = torch.randn(RED_SIZE, LSIZE).to(device)
-            sample = model.sample(sample).cpu()
-            save_image(sample.view(64, 3, RED_SIZE, RED_SIZE),
-                       join(vae_dir, 'samples/sample_' + str(epoch) + '.png'))
 
     if earlystopping.stop:
         print("End of Training because of early stopping at epoch {}".format(epoch))

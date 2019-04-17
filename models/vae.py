@@ -7,11 +7,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.pixel_cnn import PixelCNN
+import models.pixel_cnn.models as models
 
 class Decoder(nn.Module):
     """ VAE decoder """
-    def __init__(self, img_channels, latent_size):
+    def __init__(self, img_channels, latent_size, out_channels=None):
         super(Decoder, self).__init__()
         self.latent_size = latent_size
         self.img_channels = img_channels
@@ -20,7 +20,10 @@ class Decoder(nn.Module):
         self.deconv1 = nn.ConvTranspose2d(1024, 128, 5, stride=2)
         self.deconv2 = nn.ConvTranspose2d(128, 64, 5, stride=2)
         self.deconv3 = nn.ConvTranspose2d(64, 32, 6, stride=2)
-        self.deconv4 = nn.ConvTranspose2d(32, img_channels, 6, stride=2)
+        if out_channels is None:
+            self.deconv4 = nn.ConvTranspose2d(32, img_channels, 6, stride=2)
+        else:
+            self.deconv4 = nn.ConvTranspose2d(32, out_channels, 6, stride=2)
 
     def forward(self, x): # pylint: disable=arguments-differ
         x = F.relu(self.fc1(x))
@@ -80,16 +83,30 @@ class VAE(nn.Module):
         return recon_x, mu, logsigma
 
 class PixelVAE(nn.Module):
-    def __init__(self, img_channels, latent_size, n_color_dim):
+    def __init__(self, img_size, latent_size, n_color_dims,
+                 upsample=False):
         super(PixelVAE, self).__init__()
-        self.encoder = Encoder(img_channels, latent_size)
-        self.decoder = Decoder(img_channels, latent_size)
-        self.pixel_cnn = PixelCNN(img_channels, n_color_dim)
-        self.n_color_dim = n_color_dim
+        self.img_size = img_size
+        self.encoder = Encoder(img_size[0], latent_size)
+        if upsample:
+            self.decoder = Decoder(img_size[0], latent_size, out_channels=64)
+            self.pixel_cnn = models.LGated(img_size,
+                                           64, 120,
+                                           n_color_dims=n_color_dims,
+                                           num_layers=4,
+                                           k=7, padding=3)
+        else:
+            self.decoder = lambda x: x
+            self.pixel_cnn = models.CGated(img_size,
+                                           (latent_size,),
+                                           120, num_layers=4,
+                                           n_color_dims=n_color_dims,
+                                           k=7, padding=3)
 
-    def sample(self, z):
+    def sample(self, z, device):
         z = self.decoder(z)
-        return self.pixel_cnn.sample(cond=z)
+        return self.pixel_cnn.sample(self.img_size, device,
+                                     cond=z)
 
     def forward(self, x):
         mu, logsigma = self.encoder(x)

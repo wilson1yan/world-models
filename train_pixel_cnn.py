@@ -12,7 +12,7 @@ from torch.nn import functional as F
 from torchvision import transforms
 from torchvision.utils import save_image
 
-from models.pixel_cnn import PixelCNN
+from models.pixel_cnn.models import Gated
 
 from utils.misc import save_checkpoint
 from utils.misc import LSIZE, RED_SIZE
@@ -67,7 +67,8 @@ train_loader = torch.utils.data.DataLoader(
 test_loader = torch.utils.data.DataLoader(
     dataset_test, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
-model = PixelCNN(3, N_COLOR_DIM, n_blocks=12, cond=False).to(device)
+model = Gated((3, RED_SIZE, RED_SIZE), 120, n_color_dims=N_COLOR_DIM,
+              num_layers=7, k=7, padding=7//2).to(device)
 
 optimizer = optim.Adam(model.parameters(), lr=np.sqrt(args.batch_size / 32) * 1e-3)
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
@@ -172,7 +173,7 @@ for epoch in range(1, args.epochs + 1):
     if not args.nosamples:
         print("Sampling")
         with torch.no_grad():
-            sample = model.sample().cpu()
+            sample = model.sample(3, (3, RED_SIZE, RED_SIZE), device).cpu()
             save_image(sample,
                        join(vae_dir, 'samples/sample_' + str(epoch) + '.png'))
 
