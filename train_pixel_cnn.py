@@ -82,6 +82,10 @@ def loss_function(recon_x, x):
 
     return loss
 
+def process(data):
+    data *= 255
+    data = torch.floor(data / 64)
+    return data
 
 def train(epoch):
     """ One training epoch """
@@ -90,6 +94,7 @@ def train(epoch):
     train_loss = 0
     for batch_idx, data in enumerate(train_loader):
         data = data.to(device)
+        data = process(data)
         optimizer.zero_grad()
         recon_batch = model(data)
         loss = loss_function(recon_batch, data)
@@ -113,6 +118,7 @@ def test():
     with torch.no_grad():
         for data in test_loader:
             data = data.to(device)
+            data = process(data)
             recon_batch = model(data)
             test_loss += loss_function(recon_batch, data).item()
 
