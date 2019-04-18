@@ -80,13 +80,13 @@ class LGated(nn.Module):
                     (channels, h, w),
                     conditional_channels,
                     channels, colors=c, self_connection=i > 0,
-                    res_connection= i > 0,
+                    res_connection=i > 0,
                     gates=True,
                     hv_connection=True,
                     k=k, padding=padding)
             )
 
-        self.conv2 = nn.Conv2d(channels, 256*c, 1, groups=c)
+        self.conv2 = nn.Conv2d(channels, n_color_dims*c, 1, groups=c)
 
     def forward(self, x, cond):
 
@@ -100,7 +100,6 @@ class LGated(nn.Module):
             xv, xh = layer(xv, xh, cond)
 
         x = self.conv2(xh)
-
         return x.view(b, c, self.n_color_dims, h, w).transpose(1, 2)
 
     def sample(self, img_size, device, cond):

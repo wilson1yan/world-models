@@ -15,6 +15,7 @@ parser.add_argument('--rootdir', type=str, help="Directory to store rollout "
 parser.add_argument('--policy', type=str, choices=['brown', 'white'],
                     help="Directory to store rollout directories of each thread",
                     default='brown')
+parser.add_argument('--env', type=str, default='Pong-v0')
 args = parser.parse_args()
 
 rpt = args.rollouts // args.threads + 1
@@ -22,10 +23,11 @@ rpt = args.rollouts // args.threads + 1
 def _threaded_generation(i):
     tdir = join(args.rootdir, 'thread_{}'.format(i))
     makedirs(tdir, exist_ok=True)
-    cmd = ['xvfb-run', '-s', '"-screen 0 1400x900x24"']
-    cmd += ['--server-num={}'.format(i + 1)]
-    cmd += ["python", "-m", "data.carracing", "--dir",
-            tdir, "--rollouts", str(rpt), "--policy", args.policy]
+    # cmd = ['xvfb-run', '-s', '"-screen 0 1400x900x24"']
+    # cmd += ['--server-num={}'.format(i + 1)]
+    cmd = ["python", "-m", "data.generic_env", "--dir",
+           tdir, "--rollouts", str(rpt), "--policy", args.policy,
+           "--env", args.env]
     cmd = " ".join(cmd)
     print(cmd)
     call(cmd, shell=True)

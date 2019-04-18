@@ -104,6 +104,10 @@ def loss_function(recon_x, x, mu, logsigma):
     KLD = -0.5 * torch.sum(1 + 2 * logsigma - mu.pow(2) - (2 * logsigma).exp())
     return BCE + beta * KLD, BCE, KLD
 
+def process(data):
+    data *= 255
+    data = torch.floor(data / 64)
+    return data
 
 def train(epoch):
     """ One training epoch """
@@ -112,6 +116,7 @@ def train(epoch):
     train_loss = 0
     for batch_idx, data in enumerate(train_loader):
         data = data.to(device)
+        data = process(data)
         optimizer.zero_grad()
         recon_batch, mu, logvar = model(data)
         loss, bce, kld = loss_function(recon_batch, data, mu, logvar)
@@ -136,6 +141,7 @@ def test():
     with torch.no_grad():
         for data in test_loader:
             data = data.to(device)
+            data = process(data)
             recon_batch, mu, logvar = model(data)
             test_loss += loss_function(recon_batch, data, mu, logvar)[0].item()
 
