@@ -9,7 +9,7 @@ from torchvision.utils import save_image
 
 from utils.misc import LSIZE, RED_SIZE
 from data.loaders import RolloutObservationDataset
-from models.vae import VAE, PixelVAE
+from models.vae import VAE, PixelVAE, AFPixelVAE
 
 parser = argparse.ArgumentParser(description='VAE Trainer')
 parser.add_argument('--logdir', type=str, help='Directory where results are logged')
@@ -20,6 +20,8 @@ parser.add_argument('--n', type=int, default=4,
                     help='n images')
 parser.add_argument('--dataset', type=str, default='carracing',
                     help='dataset name')
+parser.add_argument('--reg', type=str, default='kl',
+                    help='regularizing distance function')
 args = parser.parse_args()
 
 N_COLOR_DIM = 4
@@ -49,11 +51,18 @@ elif args.model == 'pixel_vae_c':
 elif args.model == 'pixel_vae_l':
     model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
                      N_COLOR_DIM, upsample=True).to(device)
+elif args.model == 'pixel_vae_af_c':
+    model = AFPixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                     N_COLOR_DIM, upsample=False).to(device)
+elif args.model == 'pixel_vae_af_l':
+    model = AFPixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                     N_COLOR_DIM, upsample=True).to(device)
 else:
     raise Exception('Invalid model {}'.format(args.model))
 
-vae_dir = join(args.logdir, '{}_beta{}_{}'.format(args.model, args.beta,
-                                                  args.dataset))
+vae_dir = join(args.logdir, '{}_{}_beta{}_{}'.format(args.reg, args.model,
+                                                     args.beta,
+                                                     args.dataset))
 assert exists(vae_dir)
 
 reload_file = join(vae_dir, 'best.tar')
@@ -66,17 +75,18 @@ model.load_state_dict(state['state_dict'])
 
 data = next(iter(test_loader))
 data = data.to(device)
+data = torch.floor(data * 255 / 64) / (N_COLOR_DIM - 1)
 
 with torch.no_grad():
-    recon_x1 = model(data)[0]
-    recon_x1 = F.softmax(recon_x1, 1)
-    recon_x1 = torch.max(recon_x1, 1)[1].float() / (N_COLOR_DIM - 1)
-    recon_x1 = recon_x1.cpu()
+    # recon_x1 = model(data)[0]
+    # recon_x1 = F.softmax(recon_x1, 1)
+    # recon_x1 = torch.max(recon_x1, 1)[1].float() / (N_COLOR_DIM - 1)
+    # recon_x1 = recon_x1.cpu()
 
     z = model.encoder(data)[0]
     recon_x2 = model.sample(z, device)
     recon_x2 = recon_x2.cpu()
 
 data = data.cpu()
-images = torch.cat((data, recon_x1, recon_x2), dim=0)
-save_image(images, join(vae_dir, 'reconsruction.png'), nrow=args.n)
+images = torch.cat((data, recon_x2), dim=0)
+save_image(images, join(vae_dir, 'reconstruction.png'), nrow=args.n)

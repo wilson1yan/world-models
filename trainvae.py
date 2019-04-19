@@ -16,6 +16,7 @@ from models.vae import VAE, PixelVAE, AFPixelVAE
 
 from utils.misc import save_checkpoint
 from utils.misc import LSIZE, RED_SIZE
+from utils.metrics import compute_mmd
 ## WARNING : THIS SHOULD BE REPLACE WITH PYTORCH 0.5
 from utils.learning import EarlyStopping
 from utils.learning import ReduceLROnPlateau
@@ -35,6 +36,7 @@ parser.add_argument('--beta', type=int, default=1,
                    help='beta for beta-VAE')
 parser.add_argument('--model', type=str, default='vae')
 parser.add_argument('--dataset', type=str, default='carracing')
+parser.add_argument('--reg', type=str, default='kl')
 
 
 args = parser.parse_args()
@@ -99,7 +101,7 @@ earlystopping = EarlyStopping('min', patience=30)
 def loss_function(x, out):
     """ VAE loss function """
     if not args.model.startswith('pixel_vae_af'):
-        recon_x, mu, logsigma = out
+        recon_x, mu, logsigma, z = out
     else:
         recon_x, mu, logsigma, eps, logdet, z = out
 
@@ -109,18 +111,27 @@ def loss_function(x, out):
         BCE = BCE.mean()
     else:
         BCE = F.mse_loss(recon_x, x, size_average=False)
+    BCE /= 3 * RED_SIZE * RED_SIZE
 
     # see Appendix B from VAE paper:
     # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
     # https://arxiv.org/abs/1312.6114
     # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-    if args.model.startswith('pixel_vae_af'):
-        post_prob = -0.5 * np.log(2 * np.pi) - torch.sum(logsigma + (z - mu) ** 2 / 2 / torch.exp(2*logsigma), 1)
-        eps_prob = -0.5 * np.log(2 * np.pi) - torch.sum(eps ** 2, 1)
-        kl_loss = eps_prob + logdet - post_prob
-        KLD = -kl_loss.mean() / 3 / RED_SIZE / RED_SIZE
+    if args.reg == 'kl':
+        if args.model.startswith('pixel_vae_af'):
+            post_prob = -0.5 * np.log(2 * np.pi) - torch.sum(logsigma + (z - mu) ** 2 / 2 / torch.exp(2*logsigma), 1)
+            eps_prob = -0.5 * np.log(2 * np.pi) - torch.sum(eps ** 2, 1)
+            kl_loss = eps_prob + logdet - post_prob
+            KLD = -kl_loss.mean() / 3 / RED_SIZE / RED_SIZE
+        else:
+            KLD = -0.5 * torch.sum(1 + 2 * logsigma - mu.pow(2) - (2 * logsigma).exp())
+    elif args.reg == 'mmd':
+        # Not sure how to do w/ normalizing flow prior
+        assert not args.model.startswith('pixel_vae_af')
+        true_samples = torch.randn(*z.size()).to(device)
+        KLD = compute_mmd(z, true_samples)
     else:
-        KLD = -0.5 * torch.sum(1 + 2 * logsigma - mu.pow(2) - (2 * logsigma).exp())
+        raise Exception('Invalid regularizing metric {}'.format(args.reg))
 
     return BCE + beta * KLD, BCE, KLD
 
@@ -170,7 +181,8 @@ def test():
     return test_loss
 
 # check vae dir exists, if not, create it
-vae_dir = join(args.logdir, '{}_beta{}_{}'.format(args.model, beta, args.dataset))
+vae_dir = join(args.logdir, '{}_{}_beta{}_{}'.format(args.reg, args.model,
+                                                     beta, args.dataset))
 if not exists(vae_dir):
     mkdir(vae_dir)
     mkdir(join(vae_dir, 'samples'))

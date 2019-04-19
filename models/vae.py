@@ -90,19 +90,19 @@ class PixelVAE(nn.Module):
         self.img_size = img_size
         self.encoder = Encoder(img_size[0], latent_size)
         if upsample:
-            self.decoder = Decoder(img_size[0], latent_size, out_channels=64)
+            self.decoder = Decoder(img_size[0], latent_size, out_channels=32)
             self.pixel_cnn = models.LGated(img_size,
-                                           64, 120,
+                                           32, 90,
                                            n_color_dims=n_color_dims,
-                                           num_layers=4,
-                                           k=7, padding=3)
+                                           num_layers=2,
+                                           k=5, padding=2)
         else:
             self.decoder = lambda x: x
             self.pixel_cnn = models.CGated(img_size,
                                            (latent_size,),
-                                           120, num_layers=4,
+                                           90, num_layers=2,
                                            n_color_dims=n_color_dims,
-                                           k=7, padding=3)
+                                           k=5, padding=2)
 
     def sample(self, z, device):
         z = self.decoder(z)
@@ -116,7 +116,7 @@ class PixelVAE(nn.Module):
         z = eps.mul(sigma).add_(mu)
         z = self.decoder(z)
         recon_x = self.pixel_cnn(x, z)
-        return recon_x, mu, logsigma
+        return recon_x, mu, logsigma, z
 
 class AFPixelVAE(nn.Module):
     def __init__(self, img_size, latent_size, n_color_dims,
