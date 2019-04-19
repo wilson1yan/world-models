@@ -34,6 +34,7 @@ parser.add_argument('--nosamples', action='store_true',
 parser.add_argument('--beta', type=int, default=1,
                    help='beta for beta-VAE')
 parser.add_argument('--model', type=str, default='vae')
+parser.add_argument('--dataset', type=str, default='carracing')
 
 
 args = parser.parse_args()
@@ -63,9 +64,10 @@ transform_test = transforms.Compose([
     transforms.ToTensor(),
 ])
 
-dataset_train = RolloutObservationDataset('datasets/carracing',
+dataset_folder = join('datasets', args.dataset)
+dataset_train = RolloutObservationDataset(dataset_folder,
                                           transform_train, train=True)
-dataset_test = RolloutObservationDataset('datasets/carracing',
+dataset_test = RolloutObservationDataset(dataset_folder,
                                          transform_test, train=False)
 train_loader = torch.utils.data.DataLoader(
     dataset_train, batch_size=args.batch_size, shuffle=True, num_workers=2)
@@ -106,7 +108,7 @@ def loss_function(recon_x, x, mu, logsigma):
 
 def process(data):
     data *= 255
-    data = torch.floor(data / 64)
+    data = torch.floor(data / 64) / (N_COLOR_DIM - 1)
     return data
 
 def train(epoch):
@@ -150,7 +152,7 @@ def test():
     return test_loss
 
 # check vae dir exists, if not, create it
-vae_dir = join(args.logdir, '{}_beta{}'.format(args.model, beta))
+vae_dir = join(args.logdir, '{}_beta{}_{}'.format(args.model, beta, args.dataset))
 if not exists(vae_dir):
     mkdir(vae_dir)
     mkdir(join(vae_dir, 'samples'))

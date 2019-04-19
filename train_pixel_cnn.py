@@ -84,7 +84,7 @@ def loss_function(recon_x, x):
 
 def process(data):
     data *= 255
-    data = torch.floor(data / 64)
+    data = torch.floor(data / 64) / (N_COLOR_DIM - 1)
     return data
 
 def train(epoch):
