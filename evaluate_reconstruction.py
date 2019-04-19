@@ -18,7 +18,8 @@ parser.add_argument('--beta', type=int, default=1,
                    help='beta for beta-VAE')
 parser.add_argument('--n', type=int, default=4,
                     help='n images')
-
+parser.add_argument('--dataset', type=str, default='carracing',
+                    help='dataset name')
 args = parser.parse_args()
 
 N_COLOR_DIM = 4
@@ -51,7 +52,8 @@ elif args.model == 'pixel_vae_l':
 else:
     raise Exception('Invalid model {}'.format(args.model))
 
-vae_dir = join(args.logdir, '{}_beta{}'.format(args.model, args.beta))
+vae_dir = join(args.logdir, '{}_beta{}_{}'.format(args.model, args.beta,
+                                                  args.dataset))
 assert exists(vae_dir)
 
 reload_file = join(vae_dir, 'best.tar')
