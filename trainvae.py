@@ -12,7 +12,7 @@ from torch.nn import functional as F
 from torchvision import transforms
 from torchvision.utils import save_image
 
-from models.vae import VAE, PixelVAE
+from models.vae import VAE, PixelVAE, AFPixelVAE
 
 from utils.misc import save_checkpoint
 from utils.misc import LSIZE, RED_SIZE
@@ -80,6 +80,12 @@ elif args.model == 'pixel_vae_c':
 elif args.model == 'pixel_vae_l':
     model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
                      N_COLOR_DIM, upsample=True).to(device)
+elif args.model == 'pixel_vae_af_c':
+    model = AFPixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                       N_COLOR_DIM, upsample=False).to(device)
+elif args.model == 'pixel_vae_af_l':
+    model = AFPixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                       N_COLOR_DIM, upsample=True).to(device)
 else:
     raise Exception('Invalid model {}'.format(args.model))
 
@@ -88,8 +94,13 @@ scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
 
 # Reconstruction + KL divergence losses summed over all elements and batch
-def loss_function(recon_x, x, mu, logsigma):
+def loss_function(x, out):
     """ VAE loss function """
+    if not args.model.startswith('pixel_vae_af'):
+        recon_x, mu, logsigma = out
+    else:
+        recon_x, mu, logsigma, eps, logdet, z = out
+
     if args.model.startswith('pixel_vae'):
         target = (x * (N_COLOR_DIM - 1)).long()
         BCE = F.cross_entropy(recon_x, target, reduce=False).view(x.size(0), -1).sum(-1)
@@ -101,7 +112,14 @@ def loss_function(recon_x, x, mu, logsigma):
     # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
     # https://arxiv.org/abs/1312.6114
     # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-    KLD = -0.5 * torch.sum(1 + 2 * logsigma - mu.pow(2) - (2 * logsigma).exp())
+    if args.model.startswith('pixel_vae_af'):
+        post_prob = -0.5 * np.log(2 * np.pi) - torch.sum(logsigma + (z - mu) ** 2 / 2 / torch.exp(2*logsigma), 1)
+        eps_prob = -0.5 * np.log(2 * np.pi) - torch.sum(eps ** 2, 1)
+        kl_loss = eps_prob + logdet - post_prob
+        KLD = -kl_loss.mean() / 3 / RED_SIZE / RED_SIZE
+    else:
+        KLD = -0.5 * torch.sum(1 + 2 * logsigma - mu.pow(2) - (2 * logsigma).exp())
+
     return BCE + beta * KLD, BCE, KLD
 
 def process(data):
@@ -118,8 +136,8 @@ def train(epoch):
         data = data.to(device)
         data = process(data)
         optimizer.zero_grad()
-        recon_batch, mu, logvar = model(data)
-        loss, bce, kld = loss_function(recon_batch, data, mu, logvar)
+        out = model(data)
+        loss, bce, kld = loss_function(data, out)
         loss.backward()
         train_loss += loss.item()
         optimizer.step()
@@ -142,8 +160,8 @@ def test():
         for data in test_loader:
             data = data.to(device)
             data = process(data)
-            recon_batch, mu, logvar = model(data)
-            test_loss += loss_function(recon_batch, data, mu, logvar)[0].item()
+            out = model(data)
+            test_loss += loss_function(data, out)[0].item()
 
     test_loss /= len(test_loader.dataset)
     print('====> Test set loss: {:.4f}'.format(test_loss))
@@ -171,14 +189,6 @@ if not args.noreload and exists(reload_file):
 cur_best = None
 
 for epoch in range(1, args.epochs + 1):
-    if not args.nosamples:
-        with torch.no_grad():
-            sample = torch.randn(16, LSIZE).to(device)
-            sample = model.sample(sample, device).cpu()
-            save_image(sample,
-                       join(vae_dir, 'samples/sample_' + str(epoch - 1) + '.png'),
-                       nrow=4)
-
     train(epoch)
     test_loss = test()
     scheduler.step(test_loss)
@@ -203,3 +213,11 @@ for epoch in range(1, args.epochs + 1):
     if earlystopping.stop:
         print("End of Training because of early stopping at epoch {}".format(epoch))
         break
+
+    if not args.nosamples:
+        with torch.no_grad():
+            sample = torch.randn(16, LSIZE).to(device)
+            sample = model.sample(sample, device).cpu()
+            save_image(sample,
+                       join(vae_dir, 'samples/sample_' + str(epoch - 1) + '.png'),
+                       nrow=4)

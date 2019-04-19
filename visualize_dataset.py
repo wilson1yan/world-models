@@ -30,4 +30,5 @@ test_loader = torch.utils.data.DataLoader(
     dataset_test, batch_size=64, shuffle=True, num_workers=2)
 
 data = next(iter(test_loader))
+data = torch.floor(data * 255 / 64) / (N_COLOR_DIM - 1)
 save_image(data, 'dataset.png', nrow=8)

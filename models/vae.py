@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import models.pixel_cnn.models as models
+from models.made import MADE
 
 class Decoder(nn.Module):
     """ VAE decoder """
@@ -116,3 +117,45 @@ class PixelVAE(nn.Module):
         z = self.decoder(z)
         recon_x = self.pixel_cnn(x, z)
         return recon_x, mu, logsigma
+
+class AFPixelVAE(nn.Module):
+    def __init__(self, img_size, latent_size, n_color_dims,
+                 upsample=False):
+        super(AFPixelVAE, self).__init__()
+        self.img_size = img_size
+        self.prior = MADE(latent_size, [256, 256, 256, 256])
+        self.encoder = Encoder(img_size[0], latent_size)
+        if upsample:
+            self.decoder = Decoder(img_size[0], latent_size, out_channels=64)
+            self.pixel_cnn = models.LGated(img_size,
+                                           64, 120,
+                                           n_color_dims=n_color_dims,
+                                           num_layers=4,
+                                           k=7, padding=3)
+        else:
+            self.decoder = lambda x: x
+            self.pixel_cnn = models.CGated(img_size,
+                                           (latent_size,),
+                                           120, num_layers=4,
+                                           n_color_dims=n_color_dims,
+                                           k=7, padding=3)
+
+    def sample(self, eps, device):
+        z = self.prior.inverse(eps, device)
+        z = self.decoder(z)
+        return self.pixel_cnn.sample(self.img_size, device,
+                                     cond=z)
+
+    def forward(self, x):
+        mu_z, logsigma_z = self.encoder(x)
+        sigma_z = logsigma_z.exp()
+        eps = torch.randn_like(sigma_z)
+        z = eps.mul(sigma_z).add_(mu_z)
+
+        mu_eps, logsigma_eps = self.prior(z)
+        eps = (z - mu_eps) * torch.exp(-logsigma_eps)
+        logdet = -torch.sum(logsigma_eps.view(z.size(0), -1), -1)
+
+        cond = self.decoder(z)
+        recon_x = self.pixel_cnn(x, cond)
+        return recon_x, mu_z, logsigma_z, eps, logdet, z
