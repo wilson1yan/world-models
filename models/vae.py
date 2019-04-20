@@ -71,7 +71,7 @@ class VAE(nn.Module):
         self.encoder = Encoder(img_channels, latent_size)
         self.decoder = Decoder(img_channels, latent_size)
 
-    def sample(self, z):
+    def sample(self, z, device):
         return torch.sigmoid(self.decoder(z))
 
     def forward(self, x):
@@ -81,7 +81,7 @@ class VAE(nn.Module):
         z = eps.mul(sigma).add_(mu)
 
         recon_x = F.sigmoid(self.decoder(z))
-        return recon_x, mu, logsigma
+        return recon_x, mu, logsigma, z
 
 class PixelVAE(nn.Module):
     def __init__(self, img_size, latent_size, n_color_dims,
@@ -90,19 +90,19 @@ class PixelVAE(nn.Module):
         self.img_size = img_size
         self.encoder = Encoder(img_size[0], latent_size)
         if upsample:
-            self.decoder = Decoder(img_size[0], latent_size, out_channels=32)
+            self.decoder = Decoder(img_size[0], latent_size, out_channels=64)
             self.pixel_cnn = models.LGated(img_size,
-                                           32, 90,
+                                           64, 120,
                                            n_color_dims=n_color_dims,
                                            num_layers=2,
-                                           k=5, padding=2)
+                                           k=7, padding=3)
         else:
             self.decoder = lambda x: x
             self.pixel_cnn = models.CGated(img_size,
                                            (latent_size,),
-                                           90, num_layers=2,
+                                           120, num_layers=2,
                                            n_color_dims=n_color_dims,
-                                           k=5, padding=2)
+                                           k=7, padding=3)
 
     def sample(self, z, device):
         z = self.decoder(z)

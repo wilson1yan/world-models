@@ -109,9 +109,9 @@ def loss_function(x, out):
         target = (x * (N_COLOR_DIM - 1)).long()
         BCE = F.cross_entropy(recon_x, target, reduce=False).view(x.size(0), -1).sum(-1)
         BCE = BCE.mean()
+        BCE /= 3 * RED_SIZE * RED_SIZE
     else:
         BCE = F.mse_loss(recon_x, x, size_average=False)
-    BCE /= 3 * RED_SIZE * RED_SIZE
 
     # see Appendix B from VAE paper:
     # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014

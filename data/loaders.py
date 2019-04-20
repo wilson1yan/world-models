@@ -8,7 +8,7 @@ import torch.utils.data
 import numpy as np
 
 class _RolloutDataset(torch.utils.data.Dataset): # pylint: disable=too-few-public-methods
-    def __init__(self, root, transform, buffer_size=200, train=True): # pylint: disable=too-many-arguments
+    def __init__(self, root, transform, buffer_size=100, train=True): # pylint: disable=too-many-arguments
         self._transform = transform
 
         self._files = [

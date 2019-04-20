@@ -38,7 +38,7 @@ transform_test = transforms.Compose([
     transforms.ToTensor(),
 ])
 
-dataset_test = RolloutObservationDataset('datasets/carracing',
+dataset_test = RolloutObservationDataset(join('datasets', args.dataset),
                                          transform_test, train=False)
 test_loader = torch.utils.data.DataLoader(
     dataset_test, batch_size=args.n, shuffle=True, num_workers=2)

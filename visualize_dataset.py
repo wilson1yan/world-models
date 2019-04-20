@@ -13,7 +13,7 @@ from models.pixel_cnn.models import Gated
 from models.vae import VAE, PixelVAE
 
 parser = argparse.ArgumentParser(description='Visualize dataset')
-parser.add_argument('--dataset', type=str, default='datasets/carracing')
+parser.add_argument('--dataset', type=str, default='carracing')
 
 args = parser.parse_args()
 
@@ -24,7 +24,7 @@ transform_test = transforms.Compose([
     transforms.Resize((RED_SIZE, RED_SIZE)),
     transforms.ToTensor(),
 ])
-dataset_test = RolloutObservationDataset(args.dataset,
+dataset_test = RolloutObservationDataset(join('datasets', args.dataset),
                                          transform_test, train=False)
 test_loader = torch.utils.data.DataLoader(
     dataset_test, batch_size=64, shuffle=True, num_workers=2)
