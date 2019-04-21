@@ -9,6 +9,7 @@ import torch.nn.functional as F
 
 import models.pixel_cnn.models as models
 from models.made import MADE
+from models.spatial_softmax import SpatialSoftmax
 
 class Decoder(nn.Module):
     """ VAE decoder """
@@ -37,13 +38,13 @@ class Decoder(nn.Module):
 
 class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
     """ VAE encoder """
-    def __init__(self, img_channels, latent_size):
+    def __init__(self, img_size, latent_size):
         super(Encoder, self).__init__()
         self.latent_size = latent_size
         #self.img_size = img_size
-        self.img_channels = img_channels
+        self.img_channels = img_size[0]
 
-        self.conv1 = nn.Conv2d(img_channels, 32, 4, stride=2)
+        self.conv1 = nn.Conv2d(img_size[0], 32, 4, stride=2)
         self.conv2 = nn.Conv2d(32, 64, 4, stride=2)
         self.conv3 = nn.Conv2d(64, 128, 4, stride=2)
         self.conv4 = nn.Conv2d(128, 256, 4, stride=2)
@@ -64,12 +65,39 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
 
         return mu, logsigma
 
+class SpatialSoftmaxEncoder(nn.Module):
+    def __init__(self, img_size, latent_size):
+        super(SpatialSoftmaxEncoder, self).__init__()
+        self.latent_size = latent_size
+        self.img_channels = img_size[0]
+
+        self.conv1 = nn.Conv2d(img_size[0], 64, 7, padding=3)
+        self.conv2 = nn.Conv2d(64, 128, 5, padding=2)
+        self.conv3 = nn.Conv2d(128, 128, 3, padding=1)
+        self.conv4 = nn.Conv2d(128, 256, 3, padding=1)
+        self.ssm = SpatialSoftmax(64, 64)
+
+        self.fc_mu = nn.Linear(2*256, latent_size)
+        self.fc_logsigma = nn.Linear(2*256, latent_size)
+
+    def forward(self, x):
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = F.relu(self.conv4(x))
+        x = self.ssm(x)
+
+        mu = self.fc_mu(x)
+        logsigma = self.fc_logsigma(x)
+
+        return mu, logsigma
+
 class VAE(nn.Module):
     """ Variational Autoencoder """
-    def __init__(self, img_channels, latent_size):
+    def __init__(self, img_size, latent_size):
         super(VAE, self).__init__()
-        self.encoder = Encoder(img_channels, latent_size)
-        self.decoder = Decoder(img_channels, latent_size)
+        self.encoder = Encoder(img_size, latent_size)
+        self.decoder = Decoder(img_size, latent_size)
 
     def sample(self, z, device):
         return torch.sigmoid(self.decoder(z))
@@ -85,10 +113,13 @@ class VAE(nn.Module):
 
 class PixelVAE(nn.Module):
     def __init__(self, img_size, latent_size, n_color_dims,
-                 upsample=False):
+                 upsample=False, ssm=False):
         super(PixelVAE, self).__init__()
         self.img_size = img_size
-        self.encoder = Encoder(img_size[0], latent_size)
+        if ssm:
+            self.encoder = SpatialSoftmaxEncoder(img_size, latent_size)
+        else:
+            self.encoder = Encoder(img_size, latent_size)
         if upsample:
             self.decoder = Decoder(img_size[0], latent_size, out_channels=64)
             self.pixel_cnn = models.LGated(img_size,

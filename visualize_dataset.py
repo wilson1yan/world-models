@@ -25,10 +25,10 @@ transform_test = transforms.Compose([
     transforms.ToTensor(),
 ])
 dataset_test = RolloutObservationDataset(join('datasets', args.dataset),
-                                         transform_test, train=False)
+                                         transform_test, train=False, buffer_size=1)
 test_loader = torch.utils.data.DataLoader(
     dataset_test, batch_size=64, shuffle=True, num_workers=2)
 
 data = next(iter(test_loader))
-data = torch.floor(data * 255 / 64) / (N_COLOR_DIM - 1)
+data = torch.floor(data * 255 / (2 ** 8 / N_COLOR_DIM)) / (N_COLOR_DIM - 1)
 save_image(data, 'dataset.png', nrow=8)

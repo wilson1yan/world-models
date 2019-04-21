@@ -77,19 +77,16 @@ test_loader = torch.utils.data.DataLoader(
     dataset_test, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
 if args.model == 'vae':
-    model = VAE(3, LSIZE).to(device)
+    model = VAE((3, RED_SIZE, RED_SIZE), LSIZE).to(device)
 elif args.model == 'pixel_vae_c':
     model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
                      N_COLOR_DIM, upsample=False).to(device)
 elif args.model == 'pixel_vae_l':
     model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
                      N_COLOR_DIM, upsample=True).to(device)
-elif args.model == 'pixel_vae_af_c':
-    model = AFPixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                       N_COLOR_DIM, upsample=False).to(device)
-elif args.model == 'pixel_vae_af_l':
-    model = AFPixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                       N_COLOR_DIM, upsample=True).to(device)
+elif args.model == 'pixel_vae_c_ssm':
+    model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                     N_COLOR_DIM, upsample=False, ssm=True).to(device)
 else:
     raise Exception('Invalid model {}'.format(args.model))
 
