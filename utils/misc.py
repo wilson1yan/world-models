@@ -4,7 +4,7 @@ from os.path import join, exists
 import torch
 from torchvision import transforms
 import numpy as np
-from models import MDRNNCell, VAE, Controller
+from models import MDRNNCell, VAE, PixelVAE, Controller
 import gym
 import gym.envs.box2d
 
@@ -89,6 +89,39 @@ def load_parameters(params, controller):
     for p, p_0 in zip(controller.parameters(), params):
         p.data.copy_(p_0)
 
+class IncreaseSize(object):
+    """ Transform to increase size of Pong ball """
+    def __init__(self, game, n_expand=1):
+        self.is_pong = game == 'pong'
+        self.n_expand = n_expand
+
+        if self.is_pong:
+            print("Using pong, increasing ball size")
+
+    def __call__(self, sample):
+        if not self.is_pong:
+            return sample
+
+        sub_sample = sample[:, 34:-16, :] # now the only white is the ball
+        is_white = (sub_sample > 0.9).all(dim=0) # find all white pixels
+        is_white = torch.nonzero(is_white)
+        if is_white.size(0) == 0: # no ball to resize, so return
+            return sample
+
+        tl, br = is_white[0], is_white[-1]
+        tl = torch.clamp(tl - self.n_expand, min=0)
+        br += self.n_expand
+        tlr, tlc = tl
+        brr, brc = br
+
+        # Re-shift coordinates to un-subsampled image
+        tlr += 34
+        brr += 34
+
+        sample[:, tlr:brr+1, tlc:brc+1] = 1.0
+        return sample
+
+
 class RolloutGenerator(object):
     """ Utility to generate rollouts.
 
@@ -103,15 +136,19 @@ class RolloutGenerator(object):
     :attr device: device used to run VAE, MDRNN and Controller
     :attr time_limit: rollouts have a maximum of time_limit timesteps
     """
-    def __init__(self, mdir, device, time_limit):
+    def __init__(self, mdir, device, time_limit, beta, model, dataset, reg, n_color_dim):
         """ Build vae, rnn, controller and environment. """
         # Loading world model and vae
-        vae_file, rnn_file, ctrl_file = \
-            [join(mdir, m, 'best.tar') for m in ['vae', 'mdrnn', 'ctrl']]
+        model_name = '{}_{}_beta{}_{}'.format(reg, model, beta, dataset)
+        vae_file = join(mdir, model_name, 'best.tar')
+        rnn_file = join(mdir, '{}_{}'.format('mdrnn', model_name), 'best.tar')
+        ctrl_file = join(mdir, '{}_{}'.format('ctrl', model_name), 'best.tar')
 
         assert exists(vae_file) and exists(rnn_file),\
             "Either vae or mdrnn is untrained."
 
+        # vae_state = torch.load(vae_file)
+        # rnn_state = torch.load(rnn_file)
         vae_state, rnn_state = [
             torch.load(fname, map_location={'cuda:0': str(device)})
             for fname in (vae_file, rnn_file)]
@@ -121,7 +158,22 @@ class RolloutGenerator(object):
                   "with test loss {}".format(
                       m, s['epoch'], s['precision']))
 
-        self.vae = VAE(3, LSIZE).to(device)
+        if model == 'vae':
+            vae = VAE((3, RED_SIZE, RED_SIZE), LSIZE)
+        elif model == 'pixel_vae_c':
+            vae = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                           n_color_dim, upsample=False)
+        elif model == 'pixel_vae_l':
+            vae = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                           n_color_dim, upsample=True)
+        elif model == 'pixel_vae_c_ssm':
+            vae = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                           n_color_dim, upsample=False, ssm=True)
+        else:
+            raise Exception('Invalid model {}'.format(model))
+
+        self.vae = vae
+        self.vae.to_device_encoder_only(device)
         self.vae.load_state_dict(vae_state['state_dict'])
 
         self.mdrnn = MDRNNCell(LSIZE, ASIZE, RSIZE, 5).to(device)
@@ -156,7 +208,7 @@ class RolloutGenerator(object):
             - action: 1D np array
             - next_hidden (1 x 256) torch tensor
         """
-        _, latent_mu, _ = self.vae(obs)
+        latent_mu, _ = self.vae.encode(obs)
         action = self.controller(latent_mu, hidden[0])
         _, _, _, _, _, next_hidden = self.mdrnn(action, latent_mu, hidden)
         return action.squeeze().cpu().numpy(), next_hidden

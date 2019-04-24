@@ -14,7 +14,7 @@ from torchvision.utils import save_image
 
 from models.vae import VAE, PixelVAE, AFPixelVAE
 
-from utils.misc import save_checkpoint
+from utils.misc import save_checkpoint, IncreaseSize
 from utils.misc import LSIZE, RED_SIZE
 from utils.metrics import compute_mmd
 ## WARNING : THIS SHOULD BE REPLACE WITH PYTORCH 0.5
@@ -54,6 +54,8 @@ device = torch.device("cuda" if cuda else "cpu")
 
 
 transform_train = transforms.Compose([
+    transforms.ToTensor(),
+    IncreaseSize(game=args.dataset, n_expand=2),
     transforms.ToPILImage(),
     transforms.Resize((RED_SIZE, RED_SIZE)),
     transforms.RandomHorizontalFlip(),
@@ -61,6 +63,8 @@ transform_train = transforms.Compose([
 ])
 
 transform_test = transforms.Compose([
+    transforms.ToTensor(),
+    IncreaseSize(game=args.dataset, n_expand=2),
     transforms.ToPILImage(),
     transforms.Resize((RED_SIZE, RED_SIZE)),
     transforms.ToTensor(),

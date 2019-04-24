@@ -13,17 +13,17 @@ from models.spatial_softmax import SpatialSoftmax
 
 class Decoder(nn.Module):
     """ VAE decoder """
-    def __init__(self, img_channels, latent_size, out_channels=None):
+    def __init__(self, img_size, latent_size, out_channels=None):
         super(Decoder, self).__init__()
         self.latent_size = latent_size
-        self.img_channels = img_channels
+        self.img_channels = img_size[0]
 
         self.fc1 = nn.Linear(latent_size, 1024)
         self.deconv1 = nn.ConvTranspose2d(1024, 128, 5, stride=2)
         self.deconv2 = nn.ConvTranspose2d(128, 64, 5, stride=2)
         self.deconv3 = nn.ConvTranspose2d(64, 32, 6, stride=2)
         if out_channels is None:
-            self.deconv4 = nn.ConvTranspose2d(32, img_channels, 6, stride=2)
+            self.deconv4 = nn.ConvTranspose2d(32, img_size[0], 6, stride=2)
         else:
             self.deconv4 = nn.ConvTranspose2d(32, out_channels, 6, stride=2)
 
@@ -44,10 +44,11 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
         #self.img_size = img_size
         self.img_channels = img_size[0]
 
-        self.conv1 = nn.Conv2d(img_size[0], 32, 4, stride=2)
-        self.conv2 = nn.Conv2d(32, 64, 4, stride=2)
-        self.conv3 = nn.Conv2d(64, 128, 4, stride=2)
-        self.conv4 = nn.Conv2d(128, 256, 4, stride=2)
+        self.conv1 = nn.Conv2d(img_size[0], 128, 3, stride=2, padding=1)
+        self.conv2 = nn.Conv2d(128, 128, 3, stride=2, padding=1)
+        self.conv3 = nn.Conv2d(128, 128, 3, stride=2, padding=1)
+        self.conv4 = nn.Conv2d(128, 256, 3, stride=2, padding=1)
+        self.conv5 = nn.Conv2d(256, 256, 3, stride=2, padding=1)
 
         self.fc_mu = nn.Linear(2*2*256, latent_size)
         self.fc_logsigma = nn.Linear(2*2*256, latent_size)
@@ -58,6 +59,7 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
         x = F.relu(self.conv4(x))
+        x = F.relu(self.conv5(x))
         x = x.view(x.size(0), -1)
 
         mu = self.fc_mu(x)
@@ -111,6 +113,12 @@ class VAE(nn.Module):
         recon_x = F.sigmoid(self.decoder(z))
         return recon_x, mu, logsigma, z
 
+    def encode(self, x):
+        return self.encoder(x)
+
+    def to_device_encoder_only(self, device):
+        self.encoder = self.encoder.to(device)
+
 class PixelVAE(nn.Module):
     def __init__(self, img_size, latent_size, n_color_dims,
                  upsample=False, ssm=False):
@@ -148,6 +156,12 @@ class PixelVAE(nn.Module):
         z = self.decoder(z)
         recon_x = self.pixel_cnn(x, z)
         return recon_x, mu, logsigma, z
+
+    def encode(self, x):
+        return self.encoder(x)
+
+    def to_device_encoder_only(self, device):
+        self.encoder = self.encoder.to(device)
 
 class AFPixelVAE(nn.Module):
     def __init__(self, img_size, latent_size, n_color_dims,

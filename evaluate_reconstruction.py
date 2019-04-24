@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torchvision import transforms
 from torchvision.utils import save_image
 
-from utils.misc import LSIZE, RED_SIZE
+from utils.misc import LSIZE, RED_SIZE, IncreaseSize
 from data.loaders import RolloutObservationDataset
 from models.vae import VAE, PixelVAE, AFPixelVAE
 
@@ -33,6 +33,8 @@ cuda = torch.cuda.is_available()
 device = torch.device("cuda" if cuda else "cpu")
 
 transform_test = transforms.Compose([
+    transforms.ToTensor(),
+    IncreaseSize(game=args.dataset, n_expand=2),
     transforms.ToPILImage(),
     transforms.Resize((RED_SIZE, RED_SIZE)),
     transforms.ToTensor(),
@@ -44,7 +46,7 @@ test_loader = torch.utils.data.DataLoader(
     dataset_test, batch_size=args.n, shuffle=True, num_workers=2)
 
 if args.model == 'vae':
-    model = VAE(3, LSIZE).to(device)
+    model = VAE((3, RED_SIZE, RED_SIZE), LSIZE).to(device)
 elif args.model == 'pixel_vae_c':
     model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
                      N_COLOR_DIM, upsample=False).to(device)

@@ -104,7 +104,9 @@ class RolloutSequenceDataset(_RolloutDataset): # pylint: disable=too-few-public-
 
     def _get_data(self, data, seq_index):
         obs_data = data['observations'][seq_index:seq_index + self._seq_len + 1]
-        obs_data = self._transform(obs_data.astype(np.float32))
+        obs_data = np.stack([self._transform(obs)
+                             for obs in obs_data.astype(np.float32)],
+                            axis=0)
         obs, next_obs = obs_data[:-1], obs_data[1:]
         action = data['actions'][seq_index+1:seq_index + self._seq_len + 1]
         action = action.astype(np.float32)

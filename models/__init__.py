@@ -1,7 +1,7 @@
 """ Models package """
-from models.vae import VAE, Encoder, Decoder
+from models.vae import VAE, Encoder, Decoder, PixelVAE
 from models.mdrnn import MDRNN, MDRNNCell
 from models.controller import Controller
 
 __all__ = ['VAE', 'Encoder', 'Decoder',
-           'MDRNN', 'MDRNNCell', 'Controller']
+           'MDRNN', 'MDRNNCell', 'Controller', 'PixelVAE']

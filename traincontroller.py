@@ -32,7 +32,14 @@ parser.add_argument('--display', action='store_true', help="Use progress bars if
                     "specified.")
 parser.add_argument('--max-workers', type=int, help='Maximum number of workers.',
                     default=32)
+parser.add_argument('--beta', type=int, default=1,
+                   help='beta for beta-VAE')
+parser.add_argument('--model', type=str, default='vae')
+parser.add_argument('--dataset', type=str, default='carracing')
+parser.add_argument('--reg', type=str, default='kl')
 args = parser.parse_args()
+
+N_COLOR_DIM = 4
 
 # Max number of workers. M
 
@@ -41,20 +48,6 @@ n_samples = args.n_samples
 pop_size = args.pop_size
 num_workers = min(args.max_workers, n_samples * pop_size)
 time_limit = 1000
-
-# create tmp dir if non existent and clean it if existent
-tmp_dir = join(args.logdir, 'tmp')
-if not exists(tmp_dir):
-    mkdir(tmp_dir)
-else:
-    for fname in listdir(tmp_dir):
-        unlink(join(tmp_dir, fname))
-
-# create ctrl dir if non exitent
-ctrl_dir = join(args.logdir, 'ctrl')
-if not exists(ctrl_dir):
-    mkdir(ctrl_dir)
-
 
 ################################################################################
 #                           Thread routines                                    #
@@ -81,16 +74,20 @@ def slave_routine(p_queue, r_queue, e_queue, p_index):
     :args e_queue: as soon as not empty, terminate
     :args p_index: the process index
     """
+    tmp_dir = join(args.logdir, 'tmp')
     # init routine
     gpu = p_index % torch.cuda.device_count()
     device = torch.device('cuda:{}'.format(gpu) if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cpu')
 
     # redirect streams
     sys.stdout = open(join(tmp_dir, str(getpid()) + '.out'), 'a')
     sys.stderr = open(join(tmp_dir, str(getpid()) + '.err'), 'a')
 
     with torch.no_grad():
-        r_gen = RolloutGenerator(args.logdir, device, time_limit)
+        r_gen = RolloutGenerator(args.logdir, device, time_limit, args.beta,
+                                 args.model, args.dataset, args.reg,
+                                 N_COLOR_DIM)
 
         while e_queue.empty():
             if p_queue.empty():
@@ -99,22 +96,10 @@ def slave_routine(p_queue, r_queue, e_queue, p_index):
                 s_id, params = p_queue.get()
                 r_queue.put((s_id, r_gen.rollout(params)))
 
-
-################################################################################
-#                Define queues and start workers                               #
-################################################################################
-p_queue = Queue()
-r_queue = Queue()
-e_queue = Queue()
-
-for p_index in range(num_workers):
-    Process(target=slave_routine, args=(p_queue, r_queue, e_queue, p_index)).start()
-
-
 ################################################################################
 #                           Evaluation                                         #
 ################################################################################
-def evaluate(solutions, results, rollouts=100):
+def evaluate(solutions, results, p_queue, r_queue, rollouts=100):
     """ Give current controller evaluation.
 
     Evaluation is minus the cumulated reward averaged over rollout runs.
@@ -140,75 +125,105 @@ def evaluate(solutions, results, rollouts=100):
 
     return best_guess, np.mean(restimates), np.std(restimates)
 
-################################################################################
-#                           Launch CMA                                         #
-################################################################################
-controller = Controller(LSIZE, RSIZE, ASIZE)  # dummy instance
+def main():
+    # create tmp dir if non existent and clean it if existent
+    tmp_dir = join(args.logdir, 'tmp')
+    if not exists(tmp_dir):
+        mkdir(tmp_dir)
+    else:
+        for fname in listdir(tmp_dir):
+            unlink(join(tmp_dir, fname))
 
-# define current best and load parameters
-cur_best = None
-ctrl_file = join(ctrl_dir, 'best.tar')
-print("Attempting to load previous best...")
-if exists(ctrl_file):
-    state = torch.load(ctrl_file, map_location={'cuda:0': 'cpu'})
-    cur_best = - state['reward']
-    controller.load_state_dict(state['state_dict'])
-    print("Previous best was {}...".format(-cur_best))
+    # create ctrl dir if non exitent
+    ctrl_dir = join(args.logdir, 'ctrl_{}_{}_beta{}_{}'.format(args.reg, args.model,
+                                                               args.beta, args.dataset))
+    if not exists(ctrl_dir):
+        mkdir(ctrl_dir)
 
-parameters = controller.parameters()
-es = cma.CMAEvolutionStrategy(flatten_parameters(parameters), 0.1,
-                              {'popsize': pop_size})
+    ################################################################################
+    #                Define queues and start workers                               #
+    ################################################################################
+    p_queue = Queue()
+    r_queue = Queue()
+    e_queue = Queue()
 
-epoch = 0
-log_step = 3
-while not es.stop():
-    if cur_best is not None and - cur_best > args.target_return:
-        print("Already better than target, breaking...")
-        break
+    for p_index in range(num_workers):
+        Process(target=slave_routine, args=(p_queue, r_queue, e_queue, p_index)).start()
 
-    r_list = [0] * pop_size  # result list
-    solutions = es.ask()
+    ################################################################################
+    #                           Launch CMA                                         #
+    ################################################################################
+    controller = Controller(LSIZE, RSIZE, ASIZE)  # dummy instance
 
-    # push parameters to queue
-    for s_id, s in enumerate(solutions):
-        for _ in range(n_samples):
-            p_queue.put((s_id, s))
+    # define current best and load parameters
+    cur_best = None
+    ctrl_file = join(ctrl_dir, 'best.tar')
+    print("Attempting to load previous best...")
+    if exists(ctrl_file):
+        state = torch.load(ctrl_file, map_location={'cuda:0': 'cpu'})
+        cur_best = - state['reward']
+        controller.load_state_dict(state['state_dict'])
+        print("Previous best was {}...".format(-cur_best))
 
-    # retrieve results
-    if args.display:
-        pbar = tqdm(total=pop_size * n_samples)
-    for _ in range(pop_size * n_samples):
-        while r_queue.empty():
-            sleep(.1)
-        r_s_id, r = r_queue.get()
-        r_list[r_s_id] += r / n_samples
-        if args.display:
-            pbar.update(1)
-    if args.display:
-        pbar.close()
+    parameters = controller.parameters()
+    es = cma.CMAEvolutionStrategy(flatten_parameters(parameters), 0.1,
+                                  {'popsize': pop_size})
 
-    es.tell(solutions, r_list)
-    es.disp()
-
-    # evaluation and saving
-    if epoch % log_step == log_step - 1:
-        best_params, best, std_best = evaluate(solutions, r_list)
-        print("Current evaluation: {}".format(best))
-        if not cur_best or cur_best > best:
-            cur_best = best
-            print("Saving new best with value {}+-{}...".format(-cur_best, std_best))
-            load_parameters(best_params, controller)
-            torch.save(
-                {'epoch': epoch,
-                 'reward': - cur_best,
-                 'state_dict': controller.state_dict()},
-                join(ctrl_dir, 'best.tar'))
-        if - best > args.target_return:
-            print("Terminating controller training with value {}...".format(best))
+    epoch = 0
+    log_step = 10
+    while not es.stop():
+        if cur_best is not None and -cur_best > args.target_return:
+            print("Already better than target, breaking...")
             break
 
+        r_list = [0] * pop_size  # result list
+        solutions = es.ask()
 
-    epoch += 1
+        # push parameters to queue
+        for s_id, s in enumerate(solutions):
+            for _ in range(n_samples):
+                p_queue.put((s_id, s))
 
-es.result_pretty()
-e_queue.put('EOP')
+        # retrieve results
+        if args.display:
+            pbar = tqdm(total=pop_size * n_samples)
+        for _ in range(pop_size * n_samples):
+            while r_queue.empty():
+                sleep(.1)
+            r_s_id, r = r_queue.get()
+            r_list[r_s_id] += r / n_samples
+            if args.display:
+                pbar.update(1)
+        if args.display:
+            pbar.close()
+
+        es.tell(solutions, r_list)
+        es.disp()
+
+        # evaluation and saving
+        if epoch % log_step == log_step - 1:
+            best_params, best, std_best = evaluate(solutions, r_list, p_queue,
+                                                   r_queue)
+            print("Current evaluation: {}".format(best))
+            if not cur_best or cur_best > best:
+                cur_best = best
+                print("Saving new best with value {}+-{}...".format(-cur_best, std_best))
+                load_parameters(best_params, controller)
+                torch.save(
+                    {'epoch': epoch,
+                     'reward': - cur_best,
+                     'state_dict': controller.state_dict()},
+                    join(ctrl_dir, 'best.tar'))
+            if - best > args.target_return:
+                print("Terminating controller training with value {}...".format(best))
+                break
+
+
+        epoch += 1
+
+    es.result_pretty()
+    e_queue.put('EOP')
+
+if __name__ == '__main__':
+    torch.multiprocessing.set_start_method('spawn')
+    main()

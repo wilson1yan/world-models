@@ -10,13 +10,13 @@ from torchvision import transforms
 import numpy as np
 from tqdm import tqdm
 from utils.misc import save_checkpoint
-from utils.misc import ASIZE, LSIZE, RSIZE, RED_SIZE, SIZE
+from utils.misc import ASIZE, LSIZE, RSIZE, RED_SIZE, SIZE, IncreaseSize
 from utils.learning import EarlyStopping
 ## WARNING : THIS SHOULD BE REPLACED WITH PYTORCH 0.5
 from utils.learning import ReduceLROnPlateau
 
 from data.loaders import RolloutSequenceDataset
-from models.vae import VAE
+from models.vae import VAE, PixelVAE, AFPixelVAE
 from models.mdrnn import MDRNN, gmm_loss
 
 parser = argparse.ArgumentParser("MDRNN training")
@@ -26,6 +26,11 @@ parser.add_argument('--noreload', action='store_true',
                     help="Do not reload if specified.")
 parser.add_argument('--include_reward', action='store_true',
                     help="Add a reward modelisation term to the loss.")
+parser.add_argument('--beta', type=int, default=1,
+                   help='beta for beta-VAE')
+parser.add_argument('--model', type=str, default='vae')
+parser.add_argument('--dataset', type=str, default='carracing')
+parser.add_argument('--reg', type=str, default='kl')
 args = parser.parse_args()
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -36,18 +41,34 @@ SEQ_LEN = 32
 epochs = 30
 
 # Loading VAE
-vae_file = join(args.logdir, 'vae', 'best.tar')
+vae_dir = join(args.logdir, '{}_{}_beta{}_{}'.format(args.reg, args.model,
+                                                     args.beta, args.dataset))
+vae_file = join(vae_dir, 'best.tar')
 assert exists(vae_file), "No trained VAE in the logdir..."
 state = torch.load(vae_file)
 print("Loading VAE at epoch {} "
       "with test error {}".format(
           state['epoch'], state['precision']))
 
-vae = VAE(3, LSIZE).to(device)
+if args.model == 'vae':
+    vae = VAE((3, RED_SIZE, RED_SIZE), LSIZE).to(device)
+elif args.model == 'pixel_vae_c':
+    vae = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                   N_COLOR_DIM, upsample=False).to(device)
+elif args.model == 'pixel_vae_l':
+    vae = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                   N_COLOR_DIM, upsample=True).to(device)
+elif args.model == 'pixel_vae_c_ssm':
+    vae = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                   N_COLOR_DIM, upsample=False, ssm=True).to(device)
+else:
+    raise Exception('Invalid model {}'.format(args.model))
+
 vae.load_state_dict(state['state_dict'])
 
 # Loading model
-rnn_dir = join(args.logdir, 'mdrnn')
+rnn_dir = join(args.logdir, 'mdrnn_{}_{}_beta{}_{}'.format(args.reg, args.model,
+                                                       args.beta, args.dataset))
 rnn_file = join(rnn_dir, 'best.tar')
 
 if not exists(rnn_dir):
@@ -72,8 +93,15 @@ if exists(rnn_file) and not args.noreload:
 
 
 # Data Loading
-transform = transforms.Lambda(
-    lambda x: np.transpose(x, (0, 3, 1, 2)) / 255)
+# transform = transforms.Lambda(
+#     lambda x: np.transpose(x, (0, 3, 1, 2)) / 255)
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    IncreaseSize(game=args.dataset, n_expand=2),
+    transforms.ToPILImage(),
+    transforms.Resize((RED_SIZE, RED_SIZE)),
+    transforms.ToTensor(),
+])
 train_loader = DataLoader(
     RolloutSequenceDataset('datasets/carracing', SEQ_LEN, transform, buffer_size=30),
     batch_size=BSIZE, num_workers=8, shuffle=True)
@@ -92,18 +120,34 @@ def to_latent(obs, next_obs):
         - next_latent_obs: 4D torch tensor (BSIZE, SEQ_LEN, LSIZE)
     """
     with torch.no_grad():
-        obs, next_obs = [
-            f.upsample(x.view(-1, 3, SIZE, SIZE), size=RED_SIZE,
-                       mode='bilinear', align_corners=True)
-            for x in (obs, next_obs)]
+        # obs, next_obs = [
+        #     f.upsample(x.view(-1, 3, SIZE, SIZE), size=RED_SIZE,
+        #                mode='bilinear', align_corners=True)
+        #     for x in (obs, next_obs)]
 
-        (obs_mu, obs_logsigma), (next_obs_mu, next_obs_logsigma) = [
-            vae(x)[1:] for x in (obs, next_obs)]
+        batch_size, seq_len = obs.size(0), obs.size(1)
+        obs = obs.view(batch_size * seq_len, *obs.size()[2:])
+        next_obs = next_obs.view(batch_size * seq_len, *next_obs.size()[2:])
 
-        latent_obs, latent_next_obs = [
-            (x_mu + x_logsigma.exp() * torch.randn_like(x_mu)).view(BSIZE, SEQ_LEN, LSIZE)
-            for x_mu, x_logsigma in
-            [(obs_mu, obs_logsigma), (next_obs_mu, next_obs_logsigma)]]
+        obs_mu, obs_logsigma = vae.encode(obs)
+        next_obs_mu, next_obs_logsigma = vae.encode(next_obs)
+
+        latent_obs = obs_mu
+        latent_next_obs = next_obs_mu
+
+        # latent_obs = obs_mu + obs_logsigma.exp() * torch.randn_like(obs_mu)
+        # latent_next_obs = next_obs_mu + next_obs_logsigma.exp() * torch.randn_like(next_obs_mu)
+
+        latent_obs = latent_obs.view(batch_size, seq_len, -1)
+        latent_next_obs = latent_next_obs.view(batch_size, seq_len, -1)
+
+        # (obs_mu, obs_logsigma), (next_obs_mu, next_obs_logsigma) = [
+        #     vae(x)[1:] for x in (obs, next_obs)]
+        #
+        # latent_obs, latent_next_obs = [
+        #     (x_mu + x_logsigma.exp() * torch.randn_like(x_mu)).view(BSIZE, SEQ_LEN, LSIZE)
+        #     for x_mu, x_logsigma in
+        #     [(obs_mu, obs_logsigma), (next_obs_mu, next_obs_logsigma)]]
     return latent_obs, latent_next_obs
 
 def get_loss(latent_obs, action, reward, terminal,
