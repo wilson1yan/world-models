@@ -7,24 +7,17 @@ import torch.nn.functional as F
 from torchvision import transforms
 from torchvision.utils import save_image
 
-from utils.misc import LSIZE, RED_SIZE, IncreaseSize
+from utils.misc import LSIZE, RED_SIZE, IncreaseSize, N_COLOR_DIM
 from data.loaders import RolloutObservationDataset
-from models.vae import VAE, PixelVAE, AFPixelVAE
 
 parser = argparse.ArgumentParser(description='VAE Trainer')
-parser.add_argument('--logdir', type=str, help='Directory where results are logged')
-parser.add_argument('--model', type=str, default='vae')
-parser.add_argument('--beta', type=int, default=1,
-                   help='beta for beta-VAE')
-parser.add_argument('--n', type=int, default=4,
+parser.add_argument('--logdir', type=str, help='Directory where results are logged',
+                    default='logs')
+parser.add_argument('--n', type=int, default=16,
                     help='n images')
 parser.add_argument('--dataset', type=str, default='carracing',
                     help='dataset name')
-parser.add_argument('--reg', type=str, default='kl',
-                    help='regularizing distance function')
 args = parser.parse_args()
-
-N_COLOR_DIM = 4
 
 torch.manual_seed(123)
 torch.backends.cudnn.benchmark = True
@@ -45,29 +38,7 @@ dataset_test = RolloutObservationDataset(join('datasets', args.dataset),
 test_loader = torch.utils.data.DataLoader(
     dataset_test, batch_size=args.n, shuffle=True, num_workers=2)
 
-if args.model == 'vae':
-    model = VAE((3, RED_SIZE, RED_SIZE), LSIZE).to(device)
-elif args.model == 'pixel_vae_c':
-    model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                     N_COLOR_DIM, upsample=False).to(device)
-elif args.model == 'pixel_vae_c_ssm':
-    model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                     N_COLOR_DIM, upsample=False, ssm=True).to(device)
-elif args.model == 'pixel_vae_l':
-    model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                     N_COLOR_DIM, upsample=True).to(device)
-elif args.model == 'pixel_vae_af_c':
-    model = AFPixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                     N_COLOR_DIM, upsample=False).to(device)
-elif args.model == 'pixel_vae_af_l':
-    model = AFPixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                     N_COLOR_DIM, upsample=True).to(device)
-else:
-    raise Exception('Invalid model {}'.format(args.model))
-
-vae_dir = join(args.logdir, '{}_{}_beta{}_{}'.format(args.reg, args.model,
-                                                     args.beta,
-                                                     args.dataset))
+vae_dir = join(args.logdir, args.dataset, 'vae')
 assert exists(vae_dir)
 
 reload_file = join(vae_dir, 'best.tar')
@@ -76,18 +47,13 @@ print("Reloading model at epoch {}"
       ", with test error {}".format(
           state['epoch'],
           state['precision']))
-model.load_state_dict(state['state_dict'])
+model = torch.load(join(vae_dir, 'model_best.pt')).to(device)
 
 data = next(iter(test_loader))
 data = data.to(device)
-data = torch.floor(data * 255 / 64) / (N_COLOR_DIM - 1)
+data = torch.floor(data * 255 / (2 ** 8 / N_COLOR_DIM)) / (N_COLOR_DIM - 1)
 
 with torch.no_grad():
-    # recon_x1 = model(data)[0]
-    # recon_x1 = F.softmax(recon_x1, 1)
-    # recon_x1 = torch.max(recon_x1, 1)[1].float() / (N_COLOR_DIM - 1)
-    # recon_x1 = recon_x1.cpu()
-
     z = model.encoder(data)[0]
     recon_x2 = model.sample(z, device)
     recon_x2 = recon_x2.cpu()

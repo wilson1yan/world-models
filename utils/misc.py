@@ -14,6 +14,7 @@ gym.envs.box2d.car_racing.STATE_W, gym.envs.box2d.car_racing.STATE_H = 64, 64
 # Hardcoded for now
 ASIZE, LSIZE, RSIZE, RED_SIZE, SIZE =\
     3, 32, 256, 64, 64
+N_COLOR_DIM = 4
 
 # Same
 transform = transforms.Compose([
@@ -42,11 +43,18 @@ def sample_continuous_policy(action_space, seq_len, dt):
                     action_space.low, action_space.high))
     return actions
 
-def save_checkpoint(state, is_best, filename, best_filename):
+def save_checkpoint(state, model, is_best, folder_name):
     """ Save state in filename. Also save in best_filename if is_best. """
-    torch.save(state, filename)
+    checkpoint_fname = join(folder_name, 'checkpoint.tar')
+    best_fname = join(folder_name, 'best.tar')
+    model_cpk_fname = join(folder_name, 'model_checkpoint.pt')
+    model_best_fname = join(folder_name, 'model_best.pt')
+
+    torch.save(state, checkpoint_fname)
+    torch.save(model, model_cpk_fname)
     if is_best:
-        torch.save(state, best_filename)
+        torch.save(state, best_fname)
+        torch.save(model, model_best_fname)
 
 def flatten_parameters(params):
     """ Flattening parameters.
@@ -136,62 +144,39 @@ class RolloutGenerator(object):
     :attr device: device used to run VAE, MDRNN and Controller
     :attr time_limit: rollouts have a maximum of time_limit timesteps
     """
-    def __init__(self, mdir, device, time_limit, beta, model, dataset, reg, n_color_dim):
+    def __init__(self, mdir, device, time_limit, dataset):
         """ Build vae, rnn, controller and environment. """
         # Loading world model and vae
-        model_name = '{}_{}_beta{}_{}'.format(reg, model, beta, dataset)
-        vae_file = join(mdir, model_name, 'best.tar')
-        rnn_file = join(mdir, '{}_{}'.format('mdrnn', model_name), 'best.tar')
-        ctrl_file = join(mdir, '{}_{}'.format('ctrl', model_name), 'best.tar')
+        vae_folder = join(mdir, dataset, 'vae')
+        rnn_folder = join(mdir, dataset, 'rnn')
+        ctrl_folder = join(mdir, dataset, 'ctrl')
 
-        assert exists(vae_file) and exists(rnn_file),\
-            "Either vae or mdrnn is untrained."
-
-        # vae_state = torch.load(vae_file)
-        # rnn_state = torch.load(rnn_file)
         vae_state, rnn_state = [
             torch.load(fname, map_location={'cuda:0': str(device)})
-            for fname in (vae_file, rnn_file)]
+            for fname in (join(vae_folder, 'best.tar'), join(rnn_folder, 'best.tar'))]
 
         for m, s in (('VAE', vae_state), ('MDRNN', rnn_state)):
             print("Loading {} at epoch {} "
                   "with test loss {}".format(
                       m, s['epoch'], s['precision']))
 
-        if model == 'vae':
-            vae = VAE((3, RED_SIZE, RED_SIZE), LSIZE)
-        elif model == 'pixel_vae_c':
-            vae = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                           n_color_dim, upsample=False)
-        elif model == 'pixel_vae_l':
-            vae = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                           n_color_dim, upsample=True)
-        elif model == 'pixel_vae_c_ssm':
-            vae = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                           n_color_dim, upsample=False, ssm=True)
-        else:
-            raise Exception('Invalid model {}'.format(model))
-
-        self.vae = vae
+        self.vae = torch.load(join(vae_folder, 'model_best.pt'))
         self.vae.to_device_encoder_only(device)
-        self.vae.load_state_dict(vae_state['state_dict'])
 
-        self.mdrnn = MDRNNCell(LSIZE, ASIZE, RSIZE, 5).to(device)
-        self.mdrnn.load_state_dict(
-            {k.strip('_l0'): v for k, v in rnn_state['state_dict'].items()})
+        self.mdrnn = torch.load(join(rnn_folder, 'model_best.pt')).to(device)
 
-        self.controller = Controller(LSIZE, RSIZE, ASIZE).to(device)
-
-        # load controller if it was previously saved
+        ctrl_file = join(ctrl_folder, 'best.tar')
         if exists(ctrl_file):
             ctrl_state = torch.load(ctrl_file, map_location={'cuda:0': str(device)})
             print("Loading Controller with reward {}".format(
                 ctrl_state['reward']))
-            self.controller.load_state_dict(ctrl_state['state_dict'])
+            self.controller = torch.load(join(ctrl_folder, 'model_best.pt'))
+        else:
+            self.controller = Controller(LSIZE, RSIZE, ASIZE)
+        self.controller = self.controller.to(device)
 
         self.env = gym.make('CarRacing-v0')
         self.device = device
-
         self.time_limit = time_limit
 
     def get_action_and_transition(self, obs, hidden):

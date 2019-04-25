@@ -2,7 +2,7 @@
 import argparse
 from functools import partial
 from os.path import join, exists
-from os import mkdir
+from os import makedirs
 import torch
 import torch.nn.functional as f
 from torch.utils.data import DataLoader
@@ -17,20 +17,16 @@ from utils.learning import ReduceLROnPlateau
 
 from data.loaders import RolloutSequenceDataset
 from models.vae import VAE, PixelVAE, AFPixelVAE
-from models.mdrnn import MDRNN, gmm_loss
+from models.mdrnn import MDRNN, gmm_loss, MDRNNCell
 
 parser = argparse.ArgumentParser("MDRNN training")
-parser.add_argument('--logdir', type=str,
+parser.add_argument('--logdir', type=str, default='logs',
                     help="Where things are logged and models are loaded from.")
 parser.add_argument('--noreload', action='store_true',
                     help="Do not reload if specified.")
 parser.add_argument('--include_reward', action='store_true',
                     help="Add a reward modelisation term to the loss.")
-parser.add_argument('--beta', type=int, default=1,
-                   help='beta for beta-VAE')
-parser.add_argument('--model', type=str, default='vae')
 parser.add_argument('--dataset', type=str, default='carracing')
-parser.add_argument('--reg', type=str, default='kl')
 args = parser.parse_args()
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -41,8 +37,7 @@ SEQ_LEN = 32
 epochs = 30
 
 # Loading VAE
-vae_dir = join(args.logdir, '{}_{}_beta{}_{}'.format(args.reg, args.model,
-                                                     args.beta, args.dataset))
+vae_dir = join(args.logdir, args.dataset, 'vae')
 vae_file = join(vae_dir, 'best.tar')
 assert exists(vae_file), "No trained VAE in the logdir..."
 state = torch.load(vae_file)
@@ -50,46 +45,32 @@ print("Loading VAE at epoch {} "
       "with test error {}".format(
           state['epoch'], state['precision']))
 
-if args.model == 'vae':
-    vae = VAE((3, RED_SIZE, RED_SIZE), LSIZE).to(device)
-elif args.model == 'pixel_vae_c':
-    vae = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                   N_COLOR_DIM, upsample=False).to(device)
-elif args.model == 'pixel_vae_l':
-    vae = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                   N_COLOR_DIM, upsample=True).to(device)
-elif args.model == 'pixel_vae_c_ssm':
-    vae = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                   N_COLOR_DIM, upsample=False, ssm=True).to(device)
-else:
-    raise Exception('Invalid model {}'.format(args.model))
-
-vae.load_state_dict(state['state_dict'])
+vae = torch.load(join(vae_dir, 'model_best.pt')).to(device)
 
 # Loading model
-rnn_dir = join(args.logdir, 'mdrnn_{}_{}_beta{}_{}'.format(args.reg, args.model,
-                                                       args.beta, args.dataset))
+rnn_dir = join(args.logdir, args.dataset, 'rnn')
 rnn_file = join(rnn_dir, 'best.tar')
 
 if not exists(rnn_dir):
-    mkdir(rnn_dir)
+    makedirs(rnn_dir)
 
-mdrnn = MDRNN(LSIZE, ASIZE, RSIZE, 5)
-mdrnn.to(device)
+mdrnn = MDRNN(LSIZE, ASIZE, RSIZE, 5).to(device)
 optimizer = torch.optim.RMSprop(mdrnn.parameters(), lr=1e-3, alpha=.9)
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
-
 
 if exists(rnn_file) and not args.noreload:
     rnn_state = torch.load(rnn_file)
     print("Loading MDRNN at epoch {} "
           "with test error {}".format(
               rnn_state["epoch"], rnn_state["precision"]))
-    mdrnn.load_state_dict(rnn_state["state_dict"])
+    tmp = torch.load(join(rnn_dir, 'model_best.pt'))
+    # mdrnn.load_state_dict({k+'_l0': v for k, v in tmp.state_dict().items()})
+    mdrnn.load_state_dict(tmp.state_dict())
     optimizer.load_state_dict(rnn_state["optimizer"])
     scheduler.load_state_dict(state['scheduler'])
     earlystopping.load_state_dict(state['earlystopping'])
+
 
 
 # Data Loading
@@ -102,11 +83,14 @@ transform = transforms.Compose([
     transforms.Resize((RED_SIZE, RED_SIZE)),
     transforms.ToTensor(),
 ])
+
 train_loader = DataLoader(
-    RolloutSequenceDataset('datasets/carracing', SEQ_LEN, transform, buffer_size=30),
+    RolloutSequenceDataset(join('datasets', args.dataset), SEQ_LEN,
+                           transform, buffer_size=30),
     batch_size=BSIZE, num_workers=8, shuffle=True)
 test_loader = DataLoader(
-    RolloutSequenceDataset('datasets/carracing', SEQ_LEN, transform, train=False, buffer_size=10),
+    RolloutSequenceDataset(join('datasets', args.dataset), SEQ_LEN,
+                           transform, train=False, buffer_size=10),
     batch_size=BSIZE, num_workers=8)
 
 def to_latent(obs, next_obs):
@@ -132,11 +116,11 @@ def to_latent(obs, next_obs):
         obs_mu, obs_logsigma = vae.encode(obs)
         next_obs_mu, next_obs_logsigma = vae.encode(next_obs)
 
-        latent_obs = obs_mu
-        latent_next_obs = next_obs_mu
+        # latent_obs = obs_mu
+        # latent_next_obs = next_obs_mu
 
-        # latent_obs = obs_mu + obs_logsigma.exp() * torch.randn_like(obs_mu)
-        # latent_next_obs = next_obs_mu + next_obs_logsigma.exp() * torch.randn_like(next_obs_mu)
+        latent_obs = obs_mu + obs_logsigma.exp() * torch.randn_like(obs_mu)
+        latent_next_obs = next_obs_mu + next_obs_logsigma.exp() * torch.randn_like(next_obs_mu)
 
         latent_obs = latent_obs.view(batch_size, seq_len, -1)
         latent_next_obs = latent_next_obs.view(batch_size, seq_len, -1)
@@ -251,15 +235,14 @@ for e in range(epochs):
     is_best = not cur_best or test_loss < cur_best
     if is_best:
         cur_best = test_loss
-    checkpoint_fname = join(rnn_dir, 'checkpoint.tar')
+    tmp = MDRNNCell(LSIZE, ASIZE, RSIZE, 5)
+    tmp.load_state_dict({k.strip('_l0'): v for k, v in mdrnn.state_dict().items()})
     save_checkpoint({
-        "state_dict": mdrnn.state_dict(),
         "optimizer": optimizer.state_dict(),
         'scheduler': scheduler.state_dict(),
         'earlystopping': earlystopping.state_dict(),
         "precision": test_loss,
-        "epoch": e}, is_best, checkpoint_fname,
-                    rnn_file)
+        "epoch": e}, tmp, is_best, rnn_dir)
 
     if earlystopping.stop:
         print("End of Training because of early stopping at epoch {}".format(e))

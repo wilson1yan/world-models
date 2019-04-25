@@ -8,7 +8,7 @@ to process a queue filled with parameters to be evaluated.
 import argparse
 import sys
 from os.path import join, exists
-from os import mkdir, unlink, listdir, getpid
+from os import makedirs, unlink, listdir, getpid
 from time import sleep
 from torch.multiprocessing import Process, Queue
 import torch
@@ -16,30 +16,25 @@ import cma
 from models import Controller
 from tqdm import tqdm
 import numpy as np
-from utils.misc import RolloutGenerator, ASIZE, RSIZE, LSIZE
+from utils.misc import RolloutGenerator, ASIZE, RSIZE, LSIZE, N_COLOR_DIM
 from utils.misc import load_parameters
 from utils.misc import flatten_parameters
 
 # parsing
 parser = argparse.ArgumentParser()
-parser.add_argument('--logdir', type=str, help='Where everything is stored.')
+parser.add_argument('--logdir', type=str, help='Where everything is stored.',
+                    default='logs')
 parser.add_argument('--n-samples', type=int, help='Number of samples used to obtain '
-                    'return estimate.')
-parser.add_argument('--pop-size', type=int, help='Population size.')
+                    'return estimate.', default=3)
+parser.add_argument('--pop-size', type=int, help='Population size.', default=8)
 parser.add_argument('--target-return', type=float, help='Stops once the return '
-                    'gets above target_return')
+                    'gets above target_return', default=950)
 parser.add_argument('--display', action='store_true', help="Use progress bars if "
                     "specified.")
 parser.add_argument('--max-workers', type=int, help='Maximum number of workers.',
-                    default=32)
-parser.add_argument('--beta', type=int, default=1,
-                   help='beta for beta-VAE')
-parser.add_argument('--model', type=str, default='vae')
+                    default=12)
 parser.add_argument('--dataset', type=str, default='carracing')
-parser.add_argument('--reg', type=str, default='kl')
 args = parser.parse_args()
-
-N_COLOR_DIM = 4
 
 # Max number of workers. M
 
@@ -85,9 +80,7 @@ def slave_routine(p_queue, r_queue, e_queue, p_index):
     sys.stderr = open(join(tmp_dir, str(getpid()) + '.err'), 'a')
 
     with torch.no_grad():
-        r_gen = RolloutGenerator(args.logdir, device, time_limit, args.beta,
-                                 args.model, args.dataset, args.reg,
-                                 N_COLOR_DIM)
+        r_gen = RolloutGenerator(args.logdir, device, time_limit, args.dataset)
 
         while e_queue.empty():
             if p_queue.empty():
@@ -129,16 +122,15 @@ def main():
     # create tmp dir if non existent and clean it if existent
     tmp_dir = join(args.logdir, 'tmp')
     if not exists(tmp_dir):
-        mkdir(tmp_dir)
+        makedirs(tmp_dir)
     else:
         for fname in listdir(tmp_dir):
             unlink(join(tmp_dir, fname))
 
     # create ctrl dir if non exitent
-    ctrl_dir = join(args.logdir, 'ctrl_{}_{}_beta{}_{}'.format(args.reg, args.model,
-                                                               args.beta, args.dataset))
+    ctrl_dir = join(args.logdir, args.dataset, 'ctrl')
     if not exists(ctrl_dir):
-        mkdir(ctrl_dir)
+        makedirs(ctrl_dir)
 
     ################################################################################
     #                Define queues and start workers                               #
@@ -161,8 +153,8 @@ def main():
     print("Attempting to load previous best...")
     if exists(ctrl_file):
         state = torch.load(ctrl_file, map_location={'cuda:0': 'cpu'})
-        cur_best = - state['reward']
-        controller.load_state_dict(state['state_dict'])
+        cur_best = -state['reward']
+        controller = torch.load(join(ctrl_dir, 'model_best.pt'))
         print("Previous best was {}...".format(-cur_best))
 
     parameters = controller.parameters()
@@ -211,9 +203,9 @@ def main():
                 load_parameters(best_params, controller)
                 torch.save(
                     {'epoch': epoch,
-                     'reward': - cur_best,
-                     'state_dict': controller.state_dict()},
+                     'reward': - cur_best},
                     join(ctrl_dir, 'best.tar'))
+                torch.save(controller, join(ctrl_dir, 'model_best.pt'))
             if - best > args.target_return:
                 print("Terminating controller training with value {}...".format(best))
                 break

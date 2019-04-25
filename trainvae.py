@@ -1,7 +1,7 @@
 """ Training VAE """
 import argparse
 from os.path import join, exists
-from os import mkdir
+from os import makedirs
 
 import numpy as np
 
@@ -15,9 +15,9 @@ from torchvision.utils import save_image
 from models.vae import VAE, PixelVAE, AFPixelVAE
 
 from utils.misc import save_checkpoint, IncreaseSize
-from utils.misc import LSIZE, RED_SIZE
+from utils.misc import LSIZE, RED_SIZE, N_COLOR_DIM
 from utils.metrics import compute_mmd
-## WARNING : THIS SHOULD BE REPLACE WITH PYTORCH 0.5
+
 from utils.learning import EarlyStopping
 from utils.learning import ReduceLROnPlateau
 from data.loaders import RolloutObservationDataset
@@ -27,27 +27,20 @@ parser.add_argument('--batch-size', type=int, default=32, metavar='N',
                     help='input batch size for training (default: 32)')
 parser.add_argument('--epochs', type=int, default=1000, metavar='N',
                     help='number of epochs to train (default: 1000)')
-parser.add_argument('--logdir', type=str, help='Directory where results are logged')
+parser.add_argument('--logdir', type=str, help='Directory where results are logged',
+                    default='logs')
 parser.add_argument('--noreload', action='store_true',
                     help='Best model is not reloaded if specified')
 parser.add_argument('--nosamples', action='store_true',
                     help='Does not save samples during training if specified')
-parser.add_argument('--beta', type=int, default=1,
-                   help='beta for beta-VAE')
 parser.add_argument('--model', type=str, default='vae')
 parser.add_argument('--dataset', type=str, default='carracing')
-parser.add_argument('--reg', type=str, default='kl')
 
 
 args = parser.parse_args()
-beta = args.beta
 cuda = torch.cuda.is_available()
 
-
-N_COLOR_DIM = 4
-
 torch.manual_seed(123)
-# Fix numeric divergence due to bug in Cudnn
 torch.backends.cudnn.benchmark = True
 
 device = torch.device("cuda" if cuda else "cpu")
@@ -80,31 +73,48 @@ train_loader = torch.utils.data.DataLoader(
 test_loader = torch.utils.data.DataLoader(
     dataset_test, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
-if args.model == 'vae':
-    model = VAE((3, RED_SIZE, RED_SIZE), LSIZE).to(device)
-elif args.model == 'pixel_vae_c':
-    model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                     N_COLOR_DIM, upsample=False).to(device)
-elif args.model == 'pixel_vae_l':
-    model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                     N_COLOR_DIM, upsample=True).to(device)
-elif args.model == 'pixel_vae_c_ssm':
-    model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                     N_COLOR_DIM, upsample=False, ssm=True).to(device)
-else:
-    raise Exception('Invalid model {}'.format(args.model))
+# check vae dir exists, if not, create it
+vae_dir = join(args.logdir, args.dataset, 'vae')
+if not exists(vae_dir):
+    makedirs(vae_dir)
+    makedirs(join(vae_dir, 'samples'))
 
-optimizer = optim.Adam(model.parameters(), lr=np.sqrt(args.batch_size / 32) * 5e-4)
-scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
-earlystopping = EarlyStopping('min', patience=30)
+reload_file = join(vae_dir, 'best.tar')
+if not args.noreload and exists(reload_file):
+    state = torch.load(reload_file)
+    print("Reloading model at epoch {}"
+          ", with test error {}".format(
+              state['epoch'],
+              state['precision']))
+    model = torch.load(join(vae_dir, 'model_best.pt'))
+    optimizer = optim.Adam(model.parameters(),
+                           lr=np.sqrt(args.batch_size / 32) * 1e-3)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
+    earlystopping = EarlyStopping('min', patience=30)
+
+    optimizer.load_state_dict(state['optimizer'])
+    scheduler.load_state_dict(state['scheduler'])
+    earlystopping.load_state_dict(state['earlystopping'])
+else:
+    if args.model == 'vae':
+        model = VAE((3, RED_SIZE, RED_SIZE), LSIZE)
+    elif args.model == 'pixel_vae':
+        model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
+                         N_COLOR_DIM, upsample=False)
+    else:
+        raise Exception('Invalid model {}'.format(args.model))
+
+    optimizer = optim.Adam(model.parameters(),
+                           lr=np.sqrt(args.batch_size / 32) * 1e-3)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
+    earlystopping = EarlyStopping('min', patience=30)
+
+model = model.to(device)
 
 # Reconstruction + KL divergence losses summed over all elements and batch
 def loss_function(x, out):
     """ VAE loss function """
-    if not args.model.startswith('pixel_vae_af'):
-        recon_x, mu, logsigma, z = out
-    else:
-        recon_x, mu, logsigma, eps, logdet, z = out
+    recon_x, _, _, z = out
 
     if args.model.startswith('pixel_vae'):
         target = (x * (N_COLOR_DIM - 1)).long()
@@ -114,27 +124,10 @@ def loss_function(x, out):
     else:
         BCE = F.mse_loss(recon_x, x, size_average=False)
 
-    # see Appendix B from VAE paper:
-    # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
-    # https://arxiv.org/abs/1312.6114
-    # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-    if args.reg == 'kl':
-        if args.model.startswith('pixel_vae_af'):
-            post_prob = -0.5 * np.log(2 * np.pi) - torch.sum(logsigma + (z - mu) ** 2 / 2 / torch.exp(2*logsigma), 1)
-            eps_prob = -0.5 * np.log(2 * np.pi) - torch.sum(eps ** 2, 1)
-            kl_loss = eps_prob + logdet - post_prob
-            KLD = -kl_loss.mean() / 3 / RED_SIZE / RED_SIZE
-        else:
-            KLD = -0.5 * torch.sum(1 + 2 * logsigma - mu.pow(2) - (2 * logsigma).exp())
-    elif args.reg == 'mmd':
-        # Not sure how to do w/ normalizing flow prior
-        assert not args.model.startswith('pixel_vae_af')
-        true_samples = torch.randn(*z.size()).to(device)
-        KLD = compute_mmd(z, true_samples)
-    else:
-        raise Exception('Invalid regularizing metric {}'.format(args.reg))
+    true_samples = torch.randn(*z.size()).to(device)
+    KLD = compute_mmd(z, true_samples)
 
-    return BCE + beta * KLD, BCE, KLD
+    return BCE + KLD, BCE, KLD
 
 def process(data):
     data *= 255
@@ -181,26 +174,6 @@ def test():
     print('====> Test set loss: {:.4f}'.format(test_loss))
     return test_loss
 
-# check vae dir exists, if not, create it
-vae_dir = join(args.logdir, '{}_{}_beta{}_{}'.format(args.reg, args.model,
-                                                     beta, args.dataset))
-if not exists(vae_dir):
-    mkdir(vae_dir)
-    mkdir(join(vae_dir, 'samples'))
-
-reload_file = join(vae_dir, 'best.tar')
-if not args.noreload and exists(reload_file):
-    state = torch.load(reload_file)
-    print("Reloading model at epoch {}"
-          ", with test error {}".format(
-              state['epoch'],
-              state['precision']))
-    model.load_state_dict(state['state_dict'])
-    optimizer.load_state_dict(state['optimizer'])
-    scheduler.load_state_dict(state['scheduler'])
-    earlystopping.load_state_dict(state['earlystopping'])
-
-
 cur_best = None
 
 for epoch in range(1, args.epochs + 1):
@@ -218,12 +191,11 @@ for epoch in range(1, args.epochs + 1):
 
     save_checkpoint({
         'epoch': epoch,
-        'state_dict': model.state_dict(),
         'precision': test_loss,
         'optimizer': optimizer.state_dict(),
         'scheduler': scheduler.state_dict(),
         'earlystopping': earlystopping.state_dict()
-    }, is_best, filename, best_filename)
+    }, model, is_best, vae_dir)
 
     if earlystopping.stop:
         print("End of Training because of early stopping at epoch {}".format(epoch))
