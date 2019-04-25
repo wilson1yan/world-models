@@ -28,12 +28,15 @@ from a2c_ppo_acktr.arguments import get_args
 from a2c_ppo_acktr.envs import make_vec_envs
 from a2c_ppo_acktr.model import Policy
 from a2c_ppo_acktr.storage import RolloutStorage
+from a2c_ppo_acktr.arguments import get_args
 from evaluation import evaluate
 
 N_COLOR_DIM = 4
 TIME_LIMIT = 1000
 
-def main(args):
+def main():
+    args = get_args()
+
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
@@ -50,7 +53,7 @@ def main(args):
         utils.cleanup_log_dir(ctrl_eval_dir)
 
     torch.set_num_threads(1)
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if args.cuda else "cpu")
 
     envs = make_vec_envs(args.env_name, args.seed, args.num_processes,
                          args.gamma, args.log_dir, device, False)
@@ -166,16 +169,4 @@ def main(args):
 
 
 if __name__ == '__main__':
-    # parsing
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--logdir', type=str, help='Where everything is stored.')
-    parser.add_argument('--n-steps', type=int, help='Number of steps to train')
-    parser.add_argument('--mini-epochs', type=int, help='Number of minibatch epochs')
-    parser.add_argument('--beta', type=int, default=1,
-                       help='beta for beta-VAE')
-    parser.add_argument('--model', type=str, default='vae')
-    parser.add_argument('--dataset', type=str, default='carracing')
-    parser.add_argument('--reg', type=str, default='kl')
-    args = parser.parse_args()
-
-    main(args)
+    main()
