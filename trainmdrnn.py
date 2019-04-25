@@ -65,8 +65,7 @@ if exists(rnn_file) and not args.noreload:
           "with test error {}".format(
               rnn_state["epoch"], rnn_state["precision"]))
     tmp = torch.load(join(rnn_dir, 'model_best.pt'))
-    # mdrnn.load_state_dict({k+'_l0': v for k, v in tmp.state_dict().items()})
-    mdrnn.load_state_dict(tmp.state_dict())
+    mdrnn.load_state_dict({k+'_l0': v for k, v in tmp.state_dict().items()})
     optimizer.load_state_dict(rnn_state["optimizer"])
     scheduler.load_state_dict(state['scheduler'])
     earlystopping.load_state_dict(state['earlystopping'])
