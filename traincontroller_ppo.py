@@ -5,6 +5,8 @@ with CMAES.
 This is a bit complex. num_workers slave threads are launched
 to process a queue filled with parameters to be evaluated.
 """
+import torch
+
 import argparse
 import sys
 import time
@@ -12,8 +14,8 @@ from os.path import join, exists
 from os import mkdir
 from collections import deque
 
-import torch
 import torch.optim as optim
+import torchvision.transforms as transforms
 from models import Controller
 from tqdm import tqdm
 import numpy as np
@@ -21,18 +23,16 @@ import numpy as np
 from utils.misc import RolloutGenerator, ASIZE, RSIZE, LSIZE
 from utils.misc import load_parameters
 from utils.misc import flatten_parameters
+from utils.misc import PreprocessEnv
 
 from a2c_ppo_acktr import algo, utils
 from a2c_ppo_acktr.algo import gail
 from a2c_ppo_acktr.arguments import get_args
 from a2c_ppo_acktr.envs import make_vec_envs
-from a2c_ppo_acktr.model import Policy
+from a2c_ppo_acktr.model import WMPolicy
 from a2c_ppo_acktr.storage import RolloutStorage
 from a2c_ppo_acktr.arguments import get_args
 from evaluation import evaluate
-
-N_COLOR_DIM = 4
-TIME_LIMIT = 1000
 
 def main():
     args = get_args()
@@ -56,12 +56,11 @@ def main():
     device = torch.device("cuda:0" if args.cuda else "cpu")
 
     envs = make_vec_envs(args.env_name, args.seed, args.num_processes,
-                         args.gamma, args.log_dir, device, False)
+                         args.gamma, args.log_dir, device, False, args)
 
-    actor_critic = Policy(
+    actor_critic = WMPolicy(
         envs.observation_space.shape,
-        envs.action_space,
-        base_kwargs={'recurrent': False})
+        envs.action_space)
     actor_critic.to(device)
 
     # define current best and load parameters
@@ -71,7 +70,7 @@ def main():
     if exists(ctrl_file):
         state = torch.load(ctrl_file)
         cur_best = state['reward']
-        actor_critic.load_state_dict(state['state_dict'])
+        actor_critic = torch.load(join(ctrl_dir, 'model_best.tar'))
         print("Previous best was {}...".format(cur_best))
 
     agent = algo.PPO(
@@ -99,13 +98,11 @@ def main():
         args.num_env_steps) // args.num_steps // args.num_processes
 
     for j in range(num_updates):
-
         if args.use_linear_lr_decay:
             # decrease learning rate linearly
             utils.update_linear_schedule(
                 agent.optimizer, j, num_updates,
                 agent.optimizer.lr if args.algo == "acktr" else args.lr)
-
         for step in range(args.num_steps):
             # Sample actions
             with torch.no_grad():
@@ -113,7 +110,7 @@ def main():
                     rollouts.obs[step], rollouts.recurrent_hidden_states[step],
                     rollouts.masks[step])
 
-            # Obser reward and next obs
+            # Observe reward and next obs
             obs, reward, done, infos = envs.step(action)
 
             for info in infos:
@@ -152,11 +149,11 @@ def main():
                         np.max(episode_rewards), dist_entropy, value_loss,
                         action_loss))
 
-        if (args.eval_interval is not None and len(episode_rewards) > 1
+        if (args.eval_interval is not None
                 and j % args.eval_interval == 0):
             ob_rms = utils.get_vec_normalize(envs).ob_rms
             eval_reward = evaluate(actor_critic, ob_rms, args.env_name, args.seed,
-                                   args.num_processes, ctrl_eval_dir, device)
+                                   args.num_processes, ctrl_eval_dir, device, args)
             print("Current evaluation: {}".format(eval_reward))
             if not cur_best or eval_reward > cur_best:
                 cur_best = eval_reward

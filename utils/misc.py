@@ -6,6 +6,7 @@ from torchvision import transforms
 import numpy as np
 from models import MDRNNCell, VAE, PixelVAE, Controller
 import gym
+from gym import spaces
 import gym.envs.box2d
 
 # A bit dirty: manually change size of car racing env
@@ -225,6 +226,9 @@ class RolloutGenerator(object):
         i = 0
         while True:
             obs = transform(obs).unsqueeze(0).to(self.device)
+            obs *= 255
+            obs = torch.floor(obs / (2 ** 8 / N_COLOR_DIM)) / (N_COLOR_DIM - 1)
+
             action, hidden = self.get_action_and_transition(obs, hidden)
             obs, reward, done, _ = self.env.step(action)
 
@@ -235,3 +239,76 @@ class RolloutGenerator(object):
             if done or i > self.time_limit:
                 return - cumulative
             i += 1
+
+class PreprocessEnv(object):
+    """
+    Process multiple environments in batches
+    """
+
+    def __init__(self, envs, args, device):
+        folder = join(args.logdir, args.dataset)
+        assert exists(folder), 'No {} model folder'.format(args.dataset)
+
+        vae_file = join(folder, 'vae', 'best.tar')
+        vae_model = join(folder, 'vae', 'model_best.pt')
+        rnn_file = join(folder, 'rnn', 'best.tar')
+        rnn_model = join(folder, 'rnn', 'model_best.pt')
+
+        vae_state, rnn_state = [
+            torch.load(fname)
+            for fname in (vae_file, rnn_file)]
+
+        for m, s in (('VAE', vae_state), ('MDRNN', rnn_state)):
+            print("Loading {} at epoch {} "
+                  "with test loss {}".format(
+                      m, s['epoch'], s['precision']))
+
+        vae = torch.load(vae_model)
+        vae.to_device_encoder_only(device)
+        rnn = torch.load(rnn_model).to(device)
+
+        self.vae, self.rnn = vae, rnn
+        self.device = device
+        self.envs = envs
+
+        self.action_space = envs.action_space
+        self.observation_space = spaces.Box(-np.inf, np.inf,
+                                            shape=(LSIZE + RSIZE,),
+                                            dtype=np.float32)
+        self.n_envs = args.num_processes
+        self.hiddens = None
+
+    def reset(self):
+        self.hiddens = [
+            torch.zeros(self.n_envs, RSIZE).to(self.device)
+            for _ in range(2)
+        ]
+        obs = self.envs.reset()
+        z = self._process_obs(obs)
+        obs = torch.cat((z, self.hiddens[0]), 1)
+        return obs
+
+    def step(self, action):
+        assert self.hiddens is not None, 'Must call reset() before step()'
+        obs, reward, done, info = self.envs.step(action)
+        z = self._process_obs(obs)
+        with torch.no_grad():
+            action = action.to(self.device)
+            _, _, _, _, _, self.hiddens = self.rnn(action, z, self.hiddens)
+
+        self.hiddens[0][done.astype('uint8'), :] = 0
+        self.hiddens[1][done.astype('uint8'), :] = 0
+
+        obs = torch.cat((z, self.hiddens[0]), 1)
+        reward = torch.from_numpy(reward).unsqueeze(dim=1).float()
+        return obs, reward, done, info
+
+    def close(self):
+        self.envs.close()
+
+    def _process_obs(self, obs):
+        with torch.no_grad():
+            obs = torch.stack([transform(o) for o in obs], 0)
+            obs = obs.to(self.device)
+            latent_mu, _ = self.vae.encode(obs)
+            return latent_mu

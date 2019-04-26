@@ -10,7 +10,7 @@ from torchvision import transforms
 import numpy as np
 from tqdm import tqdm
 from utils.misc import save_checkpoint
-from utils.misc import ASIZE, LSIZE, RSIZE, RED_SIZE, SIZE, IncreaseSize
+from utils.misc import ASIZE, LSIZE, RSIZE, RED_SIZE, SIZE, IncreaseSize, N_COLOR_DIM
 from utils.learning import EarlyStopping
 ## WARNING : THIS SHOULD BE REPLACED WITH PYTORCH 0.5
 from utils.learning import ReduceLROnPlateau
@@ -190,6 +190,11 @@ def data_pass(epoch, train, include_reward): # pylint: disable=too-many-locals
     pbar = tqdm(total=len(loader.dataset), desc="Epoch {}".format(epoch))
     for i, data in enumerate(loader):
         obs, action, reward, terminal, next_obs = [arr.to(device) for arr in data]
+
+        obs *= 255
+        obs = torch.floor(obs / (2 ** 8 / N_COLOR_DIM)) / (N_COLOR_DIM - 1)
+        next_obs *= 255
+        next_obs = torch.floor(next_obs / (2 ** 8 / N_COLOR_DIM)) / (N_COLOR_DIM - 1)
 
         # transform obs
         latent_obs, latent_next_obs = to_latent(obs, next_obs)

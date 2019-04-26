@@ -44,18 +44,22 @@ class CarRacingEnv(gym.Env):
         return self.env.render()
 
     def reset(self):
-        self.hidden = torch.zeros(1, RSIZE).to(self.device)
+        self.hidden = [
+            torch.zeros(1, RSIZE).to(self.device)
+            for _ in range(2)
+        ]
         obs = self.env.reset()
         z = self._process_obs(obs)
-        obs = torch.cat((z[0], self.hidden[0])).cpu().numpy()
+        obs = torch.cat((z[0], self.hidden[0][0])).cpu().numpy()
         return obs
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
         z = self._process_obs(obs)
         with torch.no_grad():
+            action = torch.FloatTensor(action).unsqueeze(0).to(self.device)
             _, _, _, _, _, self.hidden = self.rnn(action, z, self.hidden)
-        obs = torch.cat((z[0], self.hidden[0])).cpu().numpy()
+        obs = torch.cat((z[0], self.hidden[0][0])).cpu().numpy()
         return obs, reward, done, info
 
     def _process_obs(self, obs):
