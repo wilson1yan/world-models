@@ -24,6 +24,14 @@ transform = transforms.Compose([
     transforms.ToTensor()
 ])
 
+def get_env_id(dataset):
+    if dataset == 'carracing':
+        return 'CarRacing-v0'
+    elif dataset == 'pong':
+        return 'Pong-v0'
+    else:
+        raise Exception('Invalid dataset: {}'.format(dataset))
+
 def sample_continuous_policy(action_space, seq_len, dt):
     """ Sample a continuous policy.
 
