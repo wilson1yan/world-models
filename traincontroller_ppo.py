@@ -149,7 +149,7 @@ def main():
                         np.max(episode_rewards), dist_entropy, value_loss,
                         action_loss))
 
-        if (args.eval_interval is not None
+        if (args.eval_interval is not None and len(episode_rewards) > 1
                 and j % args.eval_interval == 0):
             ob_rms = utils.get_vec_normalize(envs).ob_rms
             eval_reward = evaluate(actor_critic, ob_rms, args.env_name, args.seed,
@@ -163,6 +163,7 @@ def main():
                      'reward': eval_reward,
                      'state_dict': actor_critic.state_dict()},
                     join(ctrl_dir, 'best.tar'))
+                torch.save(actor_critic, join(ctrl_dir, 'model_best.pt'))
 
 
 if __name__ == '__main__':

@@ -8,6 +8,7 @@ from models import MDRNNCell, VAE, PixelVAE, Controller
 import gym
 from gym import spaces
 import gym.envs.box2d
+import sys, os
 
 # A bit dirty: manually change size of car racing env
 gym.envs.box2d.car_racing.STATE_W, gym.envs.box2d.car_racing.STATE_H = 64, 64
@@ -23,6 +24,14 @@ transform = transforms.Compose([
     transforms.Resize((RED_SIZE, RED_SIZE)),
     transforms.ToTensor()
 ])
+
+# Disable
+def blockPrint():
+    sys.stdout = open(os.devnull, 'w')
+
+# Restore
+def enablePrint():
+    sys.stdout = sys.__stdout__
 
 def sample_continuous_policy(action_space, seq_len, dt):
     """ Sample a continuous policy.
@@ -195,6 +204,8 @@ class RolloutGenerator(object):
             - next_hidden (1 x 256) torch tensor
         """
         latent_mu, _ = self.vae.encode(obs)
+        x = torch.cat((latent_mu, hidden[0]), 1)
+        # action = self.controller.actor(x).mode()
         action = self.controller(latent_mu, hidden[0])
         _, _, _, _, _, next_hidden = self.mdrnn(action, latent_mu, hidden)
         return action.squeeze().cpu().numpy(), next_hidden
