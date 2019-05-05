@@ -204,3 +204,10 @@ class AFPixelVAE(nn.Module):
         cond = self.decoder(z)
         recon_x = self.pixel_cnn(x, cond)
         return recon_x, mu_z, logsigma_z, eps, logdet, z
+
+class VQVAE(nn.Module):
+    def __init__(self, img_size, latent_size, latent_dim):
+        super(VQVAE, self).__init__()
+        self.img_size = img_size
+        self.latent_size = latent_size
+        self.latent_dim = latent_dim

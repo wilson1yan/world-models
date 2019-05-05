@@ -11,7 +11,6 @@ from torch import nn
 import torch.nn.functional as F
 
 import matplotlib as mpl
-mpl.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import matplotlib.gridspec as gridspec

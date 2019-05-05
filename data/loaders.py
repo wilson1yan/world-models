@@ -8,7 +8,7 @@ import torch.utils.data
 import numpy as np
 
 class _RolloutDataset(torch.utils.data.Dataset): # pylint: disable=too-few-public-methods
-    def __init__(self, root, transform, buffer_size=100, train=True): # pylint: disable=too-many-arguments
+    def __init__(self, root, transform, buffer_size=200, train=True): # pylint: disable=too-many-arguments
         self._transform = transform
 
         self._files = [
@@ -105,7 +105,7 @@ class RolloutSequenceDataset(_RolloutDataset): # pylint: disable=too-few-public-
     def _get_data(self, data, seq_index):
         obs_data = data['observations'][seq_index:seq_index + self._seq_len + 1]
         obs_data = np.stack([self._transform(obs)
-                             for obs in obs_data.astype(np.float32)],
+                             for obs in obs_data],
                             axis=0)
         obs, next_obs = obs_data[:-1], obs_data[1:]
         action = data['actions'][seq_index+1:seq_index + self._seq_len + 1]

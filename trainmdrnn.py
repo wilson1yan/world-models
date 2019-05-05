@@ -18,6 +18,7 @@ from utils.learning import ReduceLROnPlateau
 from data.loaders import RolloutSequenceDataset
 from models.vae import VAE, PixelVAE, AFPixelVAE
 from models.mdrnn import MDRNN, gmm_loss, MDRNNCell
+from torchvision.utils import save_image
 
 parser = argparse.ArgumentParser("MDRNN training")
 parser.add_argument('--logdir', type=str, default='logs',
@@ -54,7 +55,7 @@ rnn_file = join(rnn_dir, 'best.tar')
 if not exists(rnn_dir):
     makedirs(rnn_dir)
 
-mdrnn = MDRNN(LSIZE, ASIZE, RSIZE, 5).to(device)
+mdrnn = MDRNN(LSIZE, ASIZE, RSIZE, 1).to(device)
 optimizer = torch.optim.RMSprop(mdrnn.parameters(), lr=1e-3, alpha=.9)
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
@@ -239,7 +240,7 @@ for e in range(epochs):
     is_best = not cur_best or test_loss < cur_best
     if is_best:
         cur_best = test_loss
-    tmp = MDRNNCell(LSIZE, ASIZE, RSIZE, 5)
+    tmp = MDRNNCell(LSIZE, ASIZE, RSIZE, 1)
     tmp.load_state_dict({k.strip('_l0'): v for k, v in mdrnn.state_dict().items()})
     save_checkpoint({
         "optimizer": optimizer.state_dict(),

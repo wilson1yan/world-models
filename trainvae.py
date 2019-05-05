@@ -114,7 +114,7 @@ model = model.to(device)
 # Reconstruction + KL divergence losses summed over all elements and batch
 def loss_function(x, out):
     """ VAE loss function """
-    recon_x, _, _, z = out
+    recon_x, mu, logsigma, z = out
 
     if args.model.startswith('pixel_vae'):
         target = (x * (N_COLOR_DIM - 1)).long()
@@ -124,14 +124,15 @@ def loss_function(x, out):
     else:
         BCE = F.mse_loss(recon_x, x, size_average=False)
 
-    true_samples = torch.randn(*z.size()).to(device)
-    KLD = compute_mmd(z, true_samples)
+    # true_samples = torch.randn(*z.size()).to(device)
+    # KLD = compute_mmd(z, true_samples)
+    KLD = -0.5 * torch.sum(1 + 2 * logsigma - mu.pow(2) - (2 * logsigma).exp())
 
     return BCE + KLD, BCE, KLD
 
 def process(data):
     data *= 255
-    data = torch.floor(data / 64) / (N_COLOR_DIM - 1)
+    data = torch.floor(data / (2 ** 8 / N_COLOR_DIM)) / (N_COLOR_DIM - 1)
     return data
 
 def train(epoch):
