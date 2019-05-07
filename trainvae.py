@@ -65,9 +65,11 @@ transform_test = transforms.Compose([
 
 dataset_folder = join('datasets', args.dataset)
 dataset_train = RolloutObservationDataset(dataset_folder,
-                                          transform_train, train=True)
+                                          transform_train, train=True,
+                                          buffer_size=100)
 dataset_test = RolloutObservationDataset(dataset_folder,
-                                         transform_test, train=False)
+                                         transform_test, train=False,
+                                         buffer_size=100)
 train_loader = torch.utils.data.DataLoader(
     dataset_train, batch_size=args.batch_size, shuffle=True, num_workers=2)
 test_loader = torch.utils.data.DataLoader(
@@ -116,13 +118,13 @@ def loss_function(x, out):
     """ VAE loss function """
     recon_x, mu, logsigma, z = out
 
-    if args.model.startswith('pixel_vae'):
-        target = (x * (N_COLOR_DIM - 1)).long()
-        BCE = F.cross_entropy(recon_x, target, reduce=False).view(x.size(0), -1).sum(-1)
-        BCE = BCE.mean()
-        BCE /= 3 * RED_SIZE * RED_SIZE
-    else:
-        BCE = F.mse_loss(recon_x, x, size_average=False)
+    # if args.model.startswith('pixel_vae'):
+    #     target = (x * (N_COLOR_DIM - 1)).long()
+    #     BCE = F.cross_entropy(recon_x, target, reduce=False).view(x.size(0), -1).sum(-1)
+    #     BCE = BCE.mean()
+    #     BCE /= 3 * RED_SIZE * RED_SIZE
+    # else:
+    BCE = F.mse_loss(recon_x, x, size_average=False)
 
     # true_samples = torch.randn(*z.size()).to(device)
     # KLD = compute_mmd(z, true_samples)

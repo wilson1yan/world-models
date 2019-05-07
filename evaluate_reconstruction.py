@@ -58,6 +58,10 @@ with torch.no_grad():
     recon_x2 = model.sample(z, device)
     recon_x2 = recon_x2.cpu()
 
+    z = torch.randn(args.n, LSIZE).to(device)
+    samples = model.sample(z, device)
+    samples = samples.cpu()
+
 data = data.cpu()
-images = torch.cat((data, recon_x2), dim=0)
+images = torch.cat((data, recon_x2, samples), dim=0)
 save_image(images, join(vae_dir, 'reconstruction.png'), nrow=args.n)

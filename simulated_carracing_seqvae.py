@@ -3,13 +3,19 @@ Simulated carracing environment.
 """
 import argparse
 from os.path import join, exists
+
 import torch
 from torch.distributions.categorical import Categorical
+import torchvision.transforms as transforms
+from torchvision.utils import save_image
+
 import gym
 from gym import spaces
-from models.vae import VAE
+
+from models.seq_vae import SeqVAE
 from models.mdrnn import MDRNNCell
-from utils.misc import LSIZE, RSIZE, RED_SIZE
+from utils.misc import LSIZE, RSIZE, RED_SIZE, N_COLOR_DIM, IncreaseSize
+from data.loaders import RolloutObservationDataset
 
 import numpy as np
 
@@ -24,13 +30,9 @@ class SimulatedCarracing(gym.Env): # pylint: disable=too-many-instance-attribute
     loaded.
     """
     def __init__(self, directory):
-        vae_folder = join(directory, 'vae')
-        rnn_folder = join(directory, 'rnn')
-
+        vae_folder = join(directory, 'seq_vae')
         vae_file = join(vae_folder, 'best.tar')
-        rnn_file = join(rnn_folder, 'best.tar')
         assert exists(vae_file), "No VAE model in the directory..."
-        assert exists(rnn_file), "No RNN model in the directory..."
 
         # spaces
         self.action_space = spaces.Box(np.array([-1, 0, 0]), np.array([1, 1, 1]))
@@ -44,15 +46,24 @@ class SimulatedCarracing(gym.Env): # pylint: disable=too-many-instance-attribute
         print("Loading VAE at epoch {}, "
               "with test error {}...".format(
                   vae_state['epoch'], vae_state['precision']))
-        self._vae = torch.load(join(vae_folder, 'model_best.pt')).to(self.device)
+        tmp = torch.load(join(vae_folder, 'model_best.pt')).to(self.device)
+        self._vae = SeqVAE()
+        self._vae.load_state_dict(tmp.state_dict())
 
-        # load MDRNN
-        rnn_state = torch.load(rnn_file)
-        print("Loading MDRNN at epoch {}, "
-              "with test error {}...".format(
-                  rnn_state['epoch'], rnn_state['precision']))
-        self._rnn = torch.load(join(rnn_folder, 'model_best.pt')).to(self.device)
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            IncreaseSize(game=args.dataset, n_expand=2),
+            transforms.ToPILImage(),
+            transforms.Resize((RED_SIZE, RED_SIZE)),
+            transforms.ToTensor(),
+        ])
 
+        self._dataset = RolloutObservationDataset(join('datasets', 'carracing'),
+                                                  transform, train=True,
+                                                  buffer_size=10)
+        self._loader = torch.utils.data.DataLoader(
+            self._dataset, batch_size=1, shuffle=True
+        )
 
         # init state
         self._lstate = torch.randn(1, LSIZE)
@@ -70,8 +81,13 @@ class SimulatedCarracing(gym.Env): # pylint: disable=too-many-instance-attribute
     def reset(self):
         """ Resetting """
         import matplotlib.pyplot as plt
-        self._lstate = torch.randn(1, LSIZE)
+        #
+        # obs = next(iter(self._loader))
+        # obs *= 255
+        # obs = torch.floor(obs / (2 ** 8 / N_COLOR_DIM)) / (N_COLOR_DIM - 1)
+
         self._hstate = 2 * [torch.zeros(1, RSIZE)]
+        self._lstate = torch.randn(1, LSIZE)
 
         # also reset monitor
         if not self.monitor:
@@ -83,15 +99,10 @@ class SimulatedCarracing(gym.Env): # pylint: disable=too-many-instance-attribute
     def step(self, action):
         """ One step forward """
         with torch.no_grad():
-            action = torch.Tensor(action).unsqueeze(0)
-            mu, sigma, pi, r, d, n_h = self._rnn(action, self._lstate, self._hstate)
-            pi = pi.squeeze()
-            # mixt = Categorical(torch.exp(pi)).sample().item()
-
-            self._lstate = mu[:, 0, :] # + sigma[:, mixt, :] * torch.randn_like(mu[:, mixt, :])
-            self._hstate = n_h
-
-            self._obs = self._vae.sample(self._lstate, self.device)
+            action = torch.FloatTensor(action).unsqueeze(0)
+            self._lstate, r, d, self._hstate = self._vae.step(self._lstate, action,
+                                                              self._hstate)
+            self._obs = self._vae.decode(self._lstate, self.device)
             np_obs = self._obs.numpy()
             np_obs = np.clip(np_obs, 0, 1) * 255
             np_obs = np.transpose(np_obs, (0, 2, 3, 1))
@@ -99,7 +110,7 @@ class SimulatedCarracing(gym.Env): # pylint: disable=too-many-instance-attribute
             np_obs = np_obs.astype(np.uint8)
             self._visual_obs = np_obs
 
-            return np_obs, r.item(), d.item() > 0
+            return np_obs, r.item(), False
 
     def render(self): # pylint: disable=arguments-differ
         """ Rendering """

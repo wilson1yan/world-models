@@ -21,3 +21,14 @@ def compute_mmd(x, y):
     xy_kernel = compute_kernel(x, y)
     mmd = x_kernel.mean() + y_kernel.mean() - 2*xy_kernel.mean()
     return mmd
+
+def compute_kl(dist1_mu, dist1_logsigma, dist2_mu, dist2_logsigma, time_dim=False):
+    kl = 2 * (dist2_logsigma - dist1_logsigma) + (2*dist1_logsigma).exp() / (2*dist2_logsigma).exp()
+    kl += (dist2_mu - dist1_mu) ** 2 * (-2*dist2_logsigma).exp() - 1
+    kl *= 0.5
+    kl = kl.sum(-1)
+
+    if time_dim:
+        kl = kl.sum(1)
+
+    return kl.mean(0)

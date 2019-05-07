@@ -36,13 +36,18 @@ class Decoder(nn.Module):
         reconstruction = self.deconv4(x)
         return reconstruction
 
+class Identity(nn.Module):
+
+    def forward(self, x):
+        return x
+
 class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
     """ VAE encoder """
-    def __init__(self, img_size, latent_size):
+    def __init__(self, img_size, latent_size, cond_size=None):
         super(Encoder, self).__init__()
         self.latent_size = latent_size
-        #self.img_size = img_size
         self.img_channels = img_size[0]
+        self.cond_size = cond_size
 
         self.conv1 = nn.Conv2d(img_size[0], 128, 3, stride=2, padding=1)
         self.conv2 = nn.Conv2d(128, 128, 3, stride=2, padding=1)
@@ -50,11 +55,14 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
         self.conv4 = nn.Conv2d(128, 256, 3, stride=2, padding=1)
         self.conv5 = nn.Conv2d(256, 256, 3, stride=2, padding=1)
 
-        self.fc_mu = nn.Linear(2*2*256, latent_size)
-        self.fc_logsigma = nn.Linear(2*2*256, latent_size)
+        dim_size = 2*2*256
+        if cond_size is not None:
+            dim_size += cond_size
+        self.fc_mu = nn.Linear(dim_size, latent_size)
+        self.fc_logsigma = nn.Linear(dim_size, latent_size)
 
 
-    def forward(self, x): # pylint: disable=arguments-differ
+    def forward(self, x, cond=None): # pylint: disable=arguments-differ
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
@@ -62,8 +70,12 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
         x = F.relu(self.conv5(x))
         x = x.view(x.size(0), -1)
 
+        if self.cond_size is not None:
+            assert cond is not None
+            x = torch.cat((x, cond), 1)
+
         mu = self.fc_mu(x)
-        logsigma = self.fc_logsigma(x)
+        logsigma = torch.tanh(self.fc_logsigma(x))
 
         return mu, logsigma
 
@@ -96,9 +108,9 @@ class SpatialSoftmaxEncoder(nn.Module):
 
 class VAE(nn.Module):
     """ Variational Autoencoder """
-    def __init__(self, img_size, latent_size):
+    def __init__(self, img_size, latent_size, cond_size=None):
         super(VAE, self).__init__()
-        self.encoder = Encoder(img_size, latent_size)
+        self.encoder = Encoder(img_size, latent_size, cond_size=cond_size)
         self.decoder = Decoder(img_size, latent_size)
 
     def sample(self, z, device):
@@ -113,21 +125,21 @@ class VAE(nn.Module):
         recon_x = F.sigmoid(self.decoder(z))
         return recon_x, mu, logsigma, z
 
-    def encode(self, x):
-        return self.encoder(x)
+    def encode(self, x, cond=None):
+        return self.encoder(x, cond=cond)
+
+    def decode_train(self, x, z):
+        return F.sigmoid(self.decoder(z))
 
     def to_device_encoder_only(self, device):
         self.encoder = self.encoder.to(device)
 
 class PixelVAE(nn.Module):
     def __init__(self, img_size, latent_size, n_color_dims,
-                 upsample=False, ssm=False):
+                 upsample=False, cond_size=None):
         super(PixelVAE, self).__init__()
         self.img_size = img_size
-        if ssm:
-            self.encoder = SpatialSoftmaxEncoder(img_size, latent_size)
-        else:
-            self.encoder = Encoder(img_size, latent_size)
+        self.encoder = Encoder(img_size, latent_size, cond_size=cond_size)
         if upsample:
             self.decoder = Decoder(img_size[0], latent_size, out_channels=64)
             self.pixel_cnn = models.LGated(img_size,
@@ -136,7 +148,7 @@ class PixelVAE(nn.Module):
                                            num_layers=2,
                                            k=7, padding=3)
         else:
-            self.decoder = lambda x: x
+            self.decoder = Identity()
             self.pixel_cnn = models.CGated(img_size,
                                            (latent_size,),
                                            120, num_layers=2,
@@ -157,8 +169,12 @@ class PixelVAE(nn.Module):
         recon_x = self.pixel_cnn(x, z)
         return recon_x, mu, logsigma, z
 
-    def encode(self, x):
-        return self.encoder(x)
+    def encode(self, x, cond=None):
+        return self.encoder(x, cond=cond)
+
+    def decode_train(self, x, z):
+        z = self.decoder(z)
+        return self.pixel_cnn(x, z)
 
     def to_device_encoder_only(self, device):
         self.encoder = self.encoder.to(device)

@@ -19,6 +19,7 @@ from data.loaders import RolloutSequenceDataset
 from models.vae import VAE, PixelVAE, AFPixelVAE
 from models.mdrnn import MDRNN, gmm_loss, MDRNNCell
 from torchvision.utils import save_image
+from utils.metrics import compute_mmd
 
 parser = argparse.ArgumentParser("MDRNN training")
 parser.add_argument('--logdir', type=str, default='logs',
@@ -35,28 +36,32 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # constants
 BSIZE = 16
 SEQ_LEN = 32
-epochs = 30
+epochs = 1000
 
-# Loading VAE
 vae_dir = join(args.logdir, args.dataset, 'vae')
-vae_file = join(vae_dir, 'best.tar')
-assert exists(vae_file), "No trained VAE in the logdir..."
-state = torch.load(vae_file)
-print("Loading VAE at epoch {} "
-      "with test error {}".format(
-          state['epoch'], state['precision']))
+if not exists(vae_dir):
+    makedirs(vae_dir)
 
-vae = torch.load(join(vae_dir, 'model_best.pt')).to(device)
+vae_file = join(vae_dir, 'best.tar')
+if not args.noreload and exists(vae_file):
+    state = torch.load(vae_file)
+    print("Loading VAE at epoch {} "
+          "with test error {}".format(
+              state['epoch'], state['precision']))
+    vae = torch.load(join(vae_dir, 'model_best.pt'))
+else:
+    vae = VAE((3, RED_SIZE, RED_SIZE), LSIZE)
+vae = vae.to(device)
 
 # Loading model
 rnn_dir = join(args.logdir, args.dataset, 'rnn')
 rnn_file = join(rnn_dir, 'best.tar')
-
 if not exists(rnn_dir):
     makedirs(rnn_dir)
 
 mdrnn = MDRNN(LSIZE, ASIZE, RSIZE, 5).to(device)
-optimizer = torch.optim.RMSprop(mdrnn.parameters(), lr=1e-3, alpha=.9)
+params = list(mdrnn.parameters()) + list(vae.parameters())
+optimizer = torch.optim.RMSprop(params, lr=1e-3, alpha=.9)
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
 
@@ -74,8 +79,6 @@ if exists(rnn_file) and not args.noreload:
 
 
 # Data Loading
-# transform = transforms.Lambda(
-#     lambda x: np.transpose(x, (0, 3, 1, 2)) / 255)
 transform = transforms.Compose([
     transforms.ToTensor(),
     IncreaseSize(game=args.dataset, n_expand=2),
@@ -103,24 +106,25 @@ def to_latent(obs, next_obs):
         - latent_obs: 4D torch tensor (BSIZE, SEQ_LEN, LSIZE)
         - next_latent_obs: 4D torch tensor (BSIZE, SEQ_LEN, LSIZE)
     """
-    with torch.no_grad():
-        batch_size, seq_len = obs.size(0), obs.size(1)
-        obs = obs.view(batch_size * seq_len, *obs.size()[2:])
-        next_obs = next_obs.view(batch_size * seq_len, *next_obs.size()[2:])
+    batch_size, seq_len = obs.size(0), obs.size(1)
+    obs = obs.view(batch_size * seq_len, *obs.size()[2:])
+    next_obs = next_obs.view(batch_size * seq_len, *next_obs.size()[2:])
 
-        obs_mu, obs_logsigma = vae.encode(obs)
-        next_obs_mu, next_obs_logsigma = vae.encode(next_obs)
+    obs_recon, obs_mu, obs_logsigma, latent_obs = vae(obs)
+    next_obs_mu, next_obs_logsigma = vae.encode(next_obs)
 
-        latent_obs = obs_mu + obs_logsigma.exp() * torch.randn_like(obs_mu)
-        latent_next_obs = next_obs_mu + next_obs_logsigma.exp() * torch.randn_like(next_obs_mu)
+    latent_next_obs = next_obs_mu + next_obs_logsigma.exp() * torch.randn_like(next_obs_mu)
 
-        latent_obs = latent_obs.view(batch_size, seq_len, -1)
-        latent_next_obs = latent_next_obs.view(batch_size, seq_len, -1)
+    latent_obs = latent_obs.view(batch_size, seq_len, -1)
+    latent_next_obs = latent_next_obs.view(batch_size, seq_len, -1)
 
-    return latent_obs, latent_next_obs
+    obs_recon = obs_recon.view(batch_size, seq_len, *obs.size()[1:])
 
-def get_loss(latent_obs, action, reward, terminal,
-             latent_next_obs, include_reward: bool):
+    return obs_recon, obs_mu, obs_logsigma, latent_obs, latent_next_obs
+
+def get_loss(obs, obs_recon, obs_mu, obs_logsigma, latent_obs,
+             action, reward, terminal, latent_next_obs,
+             include_reward):
     """ Compute losses.
 
     The loss that is computed is:
@@ -154,7 +158,17 @@ def get_loss(latent_obs, action, reward, terminal,
         mse = 0
         scale = LSIZE + 1
     loss = (gmm + bce + mse) / scale
-    return dict(gmm=gmm, bce=bce, mse=mse, loss=loss)
+
+    rcl = f.mse_loss(obs, obs_recon, size_average=False) / obs.size(0) / obs.size(1)
+    # kld = -0.5 * torch.sum(1 + 2 * obs_logsigma - obs_mu.pow(2) - (2 * obs_logsigma).exp()) / obs.size(1)
+    latent_obs = latent_obs.contiguous()
+    z = latent_obs.view(latent_obs.size(0) * latent_obs.size(1), -1)
+    true_samples = torch.randn(*z.size()).to(device)
+    kld = compute_mmd(z, true_samples)
+
+    loss += rcl + kld
+
+    return dict(gmm=gmm, bce=bce, mse=mse, loss=loss, rcl=rcl, kld=kld, vae=rcl+kld)
 
 
 def data_pass(epoch, train, include_reward): # pylint: disable=too-many-locals
@@ -172,6 +186,8 @@ def data_pass(epoch, train, include_reward): # pylint: disable=too-many-locals
     cum_gmm = 0
     cum_bce = 0
     cum_mse = 0
+    cum_rcl = 0
+    cum_kld = 0
 
     pbar = tqdm(total=len(loader.dataset), desc="Epoch {}".format(epoch))
     for i, data in enumerate(loader):
@@ -183,30 +199,36 @@ def data_pass(epoch, train, include_reward): # pylint: disable=too-many-locals
         next_obs = torch.floor(next_obs / (2 ** 8 / N_COLOR_DIM)) / (N_COLOR_DIM - 1)
 
         # transform obs
-        latent_obs, latent_next_obs = to_latent(obs, next_obs)
+        obs_recon, obs_mu, obs_logsigma, latent_obs, latent_next_obs = to_latent(obs, next_obs)
 
         if train:
-            losses = get_loss(latent_obs, action, reward,
-                              terminal, latent_next_obs, include_reward)
+            losses = get_loss(obs, obs_recon, obs_mu, obs_logsigma, latent_obs,
+                              action, reward, terminal, latent_next_obs,
+                              include_reward)
 
             optimizer.zero_grad()
             losses['loss'].backward()
             optimizer.step()
         else:
             with torch.no_grad():
-                losses = get_loss(latent_obs, action, reward,
-                                  terminal, latent_next_obs, include_reward)
+                losses = get_loss(obs, obs_recon, obs_mu, obs_logsigma, latent_obs,
+                                  action, reward, terminal, latent_next_obs,
+                                  include_reward)
 
         cum_loss += losses['loss'].item()
         cum_gmm += losses['gmm'].item()
         cum_bce += losses['bce'].item()
         cum_mse += losses['mse'].item() if hasattr(losses['mse'], 'item') else \
             losses['mse']
+        cum_rcl += losses['rcl'].item()
+        cum_kld += losses['kld'].item()
 
         pbar.set_postfix_str("loss={loss:10.6f} bce={bce:10.6f} "
-                             "gmm={gmm:10.6f} mse={mse:10.6f}".format(
+                             "gmm={gmm:10.6f} mse={mse:10.6f} "
+                             "rcl={rcl:10.6f} kld={kld:10.6f}".format(
                                  loss=cum_loss / (i + 1), bce=cum_bce / (i + 1),
-                                 gmm=cum_gmm / LSIZE / (i + 1), mse=cum_mse / (i + 1)))
+                                 gmm=cum_gmm / LSIZE / (i + 1), mse=cum_mse / (i + 1),
+                                 rcl=cum_rcl / (i + 1), kld=cum_kld /(i + 1)))
         pbar.update(BSIZE)
     pbar.close()
     return cum_loss * BSIZE / len(loader.dataset)
@@ -233,6 +255,14 @@ for e in range(epochs):
         'earlystopping': earlystopping.state_dict(),
         "precision": test_loss,
         "epoch": e}, tmp, is_best, rnn_dir)
+
+    save_checkpoint({
+        'epoch': e,
+        'precision': test_loss,
+        'optimizer': optimizer.state_dict(),
+        'scheduler': scheduler.state_dict(),
+        'earlystopping': earlystopping.state_dict()
+    }, vae, is_best, vae_dir)
 
     if earlystopping.stop:
         print("End of Training because of early stopping at epoch {}".format(e))
