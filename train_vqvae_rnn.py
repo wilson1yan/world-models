@@ -200,7 +200,8 @@ def data_pass(epoch, train, include_reward): # pylint: disable=too-many-locals
         else:
             with torch.no_grad():
                 losses = get_loss(latent_obs, action, reward,
-                                  terminal, latent_next_obs, include_reward)
+                                  terminal, latent_next_obs, include_reward,
+                                  indices_obs, indices_next_obs)
 
         cum_loss += losses['loss'].item()
         cum_gmm += losses['gmm'].item()
