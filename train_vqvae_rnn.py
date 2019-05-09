@@ -111,17 +111,17 @@ def to_latent(obs, next_obs):
         obs = obs.view(batch_size * seq_len, *obs.size()[2:])
         next_obs = next_obs.view(batch_size * seq_len, *next_obs.size()[2:])
 
-        indices_obs = vae.encode(obs).long()
-        indices_next_obs = vae.encode(next_obs).long()
+        indices_obs = vae.encode(obs)[0].long()
+        indices_next_obs = vae.encode(next_obs)[0].long()
 
         latent_obs = vae.to_embedding(indices_obs)
         latent_next_obs = vae.to_embedding(indices_next_obs)
 
         latent_obs = latent_obs.view(batch_size, seq_len, *latent_obs.size()[1:])
-        latent_next_obs = latent_next_obs.view(batch_size, seq_len, latent_next_obs.size()[1:])
+        latent_next_obs = latent_next_obs.view(batch_size, seq_len, *latent_next_obs.size()[1:])
 
-        indices_obs = indices_obs.view(batch_size, seq_len, indices_obs.size()[1:])
-        indices_next_obs = indices_next_obs.view(batch_size, seq_len, indices_next_obs.size()[1:])
+        indices_obs = indices_obs.view(batch_size, seq_len, *indices_obs.size()[1:])
+        indices_next_obs = indices_next_obs.view(batch_size, seq_len, *indices_next_obs.size()[1:])
 
     return latent_obs, latent_next_obs, indices_obs, indices_next_obs
 

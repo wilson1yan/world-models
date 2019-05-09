@@ -164,7 +164,6 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
             x = F.relu(self.conv5(x) + self.fc1(cond).view(x.size(0),
                                                            self.code_dim, 4, 4))
         else:
-            x = F.relu(self.conv4(x))
             x = F.relu(self.conv5(x))
         return x
 
@@ -193,7 +192,7 @@ class VectorQuantizedVAE(nn.Module):
         return x_tilde
 
     def to_embedding(self, latents):
-        return self.codebook.embedding(latents).permute(0, 3, 1, 2) 
+        return self.codebook.embedding(latents).permute(0, 3, 1, 2)
 
     def decode_train(self, obs, z_q_x_st):
         return self.decoder(z_q_x_st)
