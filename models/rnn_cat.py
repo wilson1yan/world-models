@@ -62,5 +62,9 @@ class RNNCatCell(nn.Module):
         out_rnn = next_hidden[0]
 
         dist_out = self.output_layer(out_rnn)
-        dist_out = dist_out.view(dist_out.size(0), self.n_latents, K)
-        return dist_out.permute(0, 2, 1)
+        dist_out = dist_out.view(dist_out.size(0), *self.latent_shape, K)
+
+        r = outs[:, -2]
+        d = outs[:, -1]
+
+        return dist_out.permute(0, 3, 1, 2), r, d, next_hidden
