@@ -231,7 +231,7 @@ for e in range(epochs):
     is_best = not cur_best or test_loss < cur_best
     if is_best:
         cur_best = test_loss
-    tmp = RNNCat(latent_shape, code_dim, K, ASIZE, RSIZE)
+    tmp = RNNCatCell(latent_shape, code_dim, K, ASIZE, RSIZE)
     tmp.load_state_dict({k.strip('_l0'): v for k, v in mdrnn.state_dict().items()})
     save_checkpoint({
         "optimizer": optimizer.state_dict(),
