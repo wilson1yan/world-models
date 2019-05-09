@@ -52,7 +52,7 @@ class RNNCatCell(nn.Module):
         lsize = self.n_latents * code_dim
 
         self.rnn = nn.LSTMCell(lsize + actions, hiddens)
-        self.output_layer = nn.Linear(hiddens, self.n_latents * K)
+        self.output_layer = nn.Linear(hiddens, self.n_latents * K + 2)
 
 
     def forward(self, action, latent, hidden):
