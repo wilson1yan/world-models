@@ -36,6 +36,10 @@ BSIZE = 16
 SEQ_LEN = 32
 epochs = 1000
 
+latent_shape = (4, 4)
+code_dim = 64
+K = 128
+
 # Loading VAE
 vae_dir = join(args.logdir, args.dataset, 'vqvae')
 vae_file = join(vae_dir, 'best.tar')
@@ -54,7 +58,7 @@ rnn_file = join(rnn_dir, 'best.tar')
 if not exists(rnn_dir):
     makedirs(rnn_dir)
 
-mdrnn = RNNCat((4, 4), 64, 128, ASIZE, RSIZE).to(device)
+mdrnn = RNNCat(latent_shape, code_dim, K, ASIZE, RSIZE).to(device)
 optimizer = torch.optim.RMSprop(mdrnn.parameters(), lr=1e-3, alpha=.9)
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
@@ -107,16 +111,23 @@ def to_latent(obs, next_obs):
         obs = obs.view(batch_size * seq_len, *obs.size()[2:])
         next_obs = next_obs.view(batch_size * seq_len, *next_obs.size()[2:])
 
-        latent_obs = vae.encode(obs)
-        latent_next_obs = vae.encode(next_obs)
+        indices_obs = vae.encode(obs).long()
+        indices_next_obs = vae.encode(next_obs).long()
 
-        latent_obs = latent_obs.view(batch_size, seq_len, -1)
-        latent_next_obs = latent_next_obs.view(batch_size, seq_len, -1)
+        latent_obs = vae.to_embedding(indices_obs)
+        latent_next_obs = vae.to_embedding(indices_next_obs)
 
-    return latent_obs, latent_next_obs
+        latent_obs = latent_obs.view(batch_size, seq_len, *latent_obs.size()[1:])
+        latent_next_obs = latent_next_obs.view(batch_size, seq_len, latent_next_obs.size()[1:])
+
+        indices_obs = indices_obs.view(batch_size, seq_len, indices_obs.size()[1:])
+        indices_next_obs = indices_next_obs.view(batch_size, seq_len, indices_next_obs.size()[1:])
+
+    return latent_obs, latent_next_obs, indices_obs, indices_next_obs
 
 def get_loss(latent_obs, action, reward, terminal,
-             latent_next_obs, include_reward: bool):
+             latent_next_obs, include_reward: bool,
+             indices_obs, indices_next_obs):
     """ Compute losses.
 
     The loss that is computed is:
@@ -139,7 +150,7 @@ def get_loss(latent_obs, action, reward, terminal,
                              for arr in [latent_obs, action,
                                        reward, terminal]]
     dist_outs, rs, ds = mdrnn(action, latent_obs)
-    gmm = cat_loss(latent_next_obs, dist_outs)
+    gmm = cat_loss(indices_next_obs, dist_outs)
     bce = f.binary_cross_entropy_with_logits(ds, terminal)
     if include_reward:
         mse = f.mse_loss(rs, reward)
@@ -176,11 +187,12 @@ def data_pass(epoch, train, include_reward): # pylint: disable=too-many-locals
         obs, next_obs = process(obs), process(next_obs)
 
         # transform obs
-        latent_obs, latent_next_obs = to_latent(obs, next_obs)
+        latent_obs, latent_next_obs, indices_obs, indices_next_obs = to_latent(obs, next_obs)
 
         if train:
             losses = get_loss(latent_obs, action, reward,
-                              terminal, latent_next_obs, include_reward)
+                              terminal, latent_next_obs, include_reward,
+                              indices_obs, indices_next_obs)
 
             optimizer.zero_grad()
             losses['loss'].backward()
@@ -218,7 +230,7 @@ for e in range(epochs):
     is_best = not cur_best or test_loss < cur_best
     if is_best:
         cur_best = test_loss
-    tmp = RNNCat((4, 4), 64, 128, ASIZE, RSIZE)
+    tmp = RNNCat(latent_shape, code_dim, K, ASIZE, RSIZE)
     tmp.load_state_dict({k.strip('_l0'): v for k, v in mdrnn.state_dict().items()})
     save_checkpoint({
         "optimizer": optimizer.state_dict(),

@@ -31,7 +31,7 @@ class RNNCat(nn.Module):
         ins = torch.cat([actions, latent])
         outs, _ = self.rnn(ins)
         outs = self.output_layer(outs)
-        dist_outs = [:, :, :-2]
+        dist_outs = dist_outs[:, :, :-2]
         dist_outs = dist_outs.view(dist_outs.size(0), dist_outs.size(1), self.n_latents, self.K)
         dist_outs = dist_outs.permute(1, 3, 0, 2) # B x K x SEQ x N_LATENTS
 
