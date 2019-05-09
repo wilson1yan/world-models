@@ -46,9 +46,7 @@ class SimulatedCarracing(gym.Env): # pylint: disable=too-many-instance-attribute
         print("Loading VAE at epoch {}, "
               "with test error {}...".format(
                   vae_state['epoch'], vae_state['precision']))
-        tmp = torch.load(join(vae_folder, 'model_best.pt')).to(self.device)
-        self._vae = SeqVAE()
-        self._vae.load_state_dict(tmp.state_dict())
+        self._vae = torch.load(join(vae_folder, 'model_best.pt')).to(self.device)
 
         transform = transforms.Compose([
             transforms.ToTensor(),

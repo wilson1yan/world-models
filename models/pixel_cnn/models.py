@@ -143,8 +143,7 @@ class CGated(nn.Module):
                     k=k, padding=padding)
             )
 
-        # self.conv2 = nn.Conv2d(channels, self.n_color_dims*c, 1, groups=c)
-        self.conv2 = nn.Conv2d(channels, c, 1, groups=c)
+        self.conv2 = nn.Conv2d(channels, self.n_color_dims*c, 1, groups=c)
 
     def forward(self, x, cond):
 
@@ -158,8 +157,8 @@ class CGated(nn.Module):
             xv, xh = layer(xv, xh, cond)
 
         x = self.conv2(xh)
-        return torch.sigmoid(x)
-        # return x.view(b, c, self.n_color_dims, h, w).transpose(1, 2)
+
+        return x.view(b, c, self.n_color_dims, h, w).transpose(1, 2)
 
     def sample(self, img_size, device, cond):
         c, h, w = img_size
@@ -169,9 +168,8 @@ class CGated(nn.Module):
                 for channel in range(c):
 
                     result = self(samples, cond)
-                    samples[:, channel, i, j] = result[:, :, channel, i, j]
-                    # probs = F.softmax(result[:, :, channel, i, j], 1).data
+                    probs = F.softmax(result[:, :, channel, i, j], 1).data
 
-                    # pixel_sample = torch.multinomial(probs, 1).float() / (self.n_color_dims - 1)
-                    # samples[:, channel, i, j] = pixel_sample.squeeze()
+                    pixel_sample = torch.multinomial(probs, 1).float() / (self.n_color_dims - 1)
+                    samples[:, channel, i, j] = pixel_sample.squeeze()
         return samples

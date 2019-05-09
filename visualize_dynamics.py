@@ -25,33 +25,18 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     folder = join(args.logdir, args.dataset)
-    vae_folder = join(folder, 'vae')
-    rnn_folder = join(folder, 'rnn')
-
+    vae_folder = join(folder, 'seq_vae')
     assert exists(join(vae_folder, 'best.tar'))
-    assert exists(join(rnn_folder, 'best.tar'))
-
-    vae_state = torch.load(join(vae_folder, 'best.tar'))
-    rnn_state = torch.load(join(rnn_folder, 'best.tar'))
-
-    for m, s in (('VAE', vae_state), ('RNN', rnn_state)):
-        print("Loading {} at epoch {} "
-              "with test loss {}".format(
-                  m, s['epoch'], s['precision']))
 
     vae = torch.load(join(vae_folder, 'model_best.pt'))
-    rnn = torch.load(join(rnn_folder, 'model_best.pt'))
-
     vae = vae.to(device)
-    rnn = rnn.to(device)
 
-    hidden = [
+    hiddens = [
         torch.zeros(1, RSIZE).to(device)
         for _ in range(2)
     ]
 
-    observations = []
-    n_timesteps = 100
+    n_timesteps = 64
 
     transform = transforms.Compose([
         transforms.ToTensor(),
@@ -66,34 +51,33 @@ def main():
     data_loader = torch.utils.data.DataLoader(
         dataset, batch_size=1, shuffle=True, num_workers=1)
 
-    env = gym.make(get_env_id(args.dataset))
     obs = next(iter(data_loader)).to(device)
-    obs = vae.encode(obs)[0]
+    obs = vae.encode(obs, cond=hiddens[0])[0]
 
-    for _ in tqdm(range(n_timesteps)):
+    observations = []
+    for t in tqdm(range(n_timesteps)):
         observations.append(obs.clone().cpu())
-        action = env.action_space.sample()
-        action = torch.FloatTensor(action).unsqueeze(0).to(device)
-        mus, _, logpi, _, _, hidden = rnn(action, obs, hidden)
-        mixt = Categorical(logpi.exp()).sample().item()
-        obs = mus[:, mixt, :]
+        action = torch.zeros(6).unsqueeze(0).to(device)
+        action[0, 3] = 1
+        with torch.no_grad():
+            obs, r, d, hiddens = vae.step(obs, action, hiddens)
     observations = torch.cat(observations, 0)
 
-    batch_size = 32
+    batch_size = 128
     images = []
     for i in range(0, len(observations), batch_size):
         with torch.no_grad():
             obs = observations[i:i+batch_size].to(device)
-            images.append(vae.sample(obs, device).cpu())
+            images.append(vae.decode(obs, device).cpu())
     images = torch.cat(images, 0)
 
-    save_image(images, join(folder, 'dynamics_images.png'), nrow=10)
+    save_image(images, join(folder, 'dynamics_images.png'), nrow=8)
 
-    to_pil = transforms.ToPILImage()
-    images = [to_pil(o) for o in images]
-    images[0].save(join(folder, 'dynamics.gif'), format='GIF',
-                   append_images=images[1:],
-                   duration=100, loop=0)
+    # to_pil = transforms.ToPILImage()
+    # images = [to_pil(o) for o in images]
+    # images[0].save(join(folder, 'dynamics.gif'), format='GIF',
+    #                append_images=images[1:],
+    #                duration=100, loop=0)
 
 if __name__ == '__main__':
     main()

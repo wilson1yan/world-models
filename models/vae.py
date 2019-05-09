@@ -151,9 +151,9 @@ class PixelVAE(nn.Module):
             self.decoder = Identity()
             self.pixel_cnn = models.CGated(img_size,
                                            (latent_size,),
-                                           120, num_layers=2,
+                                           60, num_layers=2,
                                            n_color_dims=n_color_dims,
-                                           k=7, padding=3)
+                                           k=5, padding=2)
 
     def sample(self, z, device):
         z = self.decoder(z)

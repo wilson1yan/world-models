@@ -12,7 +12,7 @@ from torch.nn import functional as F
 from torchvision import transforms
 from torchvision.utils import save_image
 
-from models.vae import VAE, PixelVAE, AFPixelVAE
+from models.vq_vae import VectorQuantizedVAE
 
 from utils.misc import save_checkpoint, IncreaseSize
 from utils.misc import LSIZE, RED_SIZE, N_COLOR_DIM
@@ -31,10 +31,9 @@ parser.add_argument('--logdir', type=str, help='Directory where results are logg
                     default='logs')
 parser.add_argument('--noreload', action='store_true',
                     help='Best model is not reloaded if specified')
-parser.add_argument('--nosamples', action='store_true',
-                    help='Does not save samples during training if specified')
 parser.add_argument('--model', type=str, default='vae')
 parser.add_argument('--dataset', type=str, default='carracing')
+parser.add_argument('--beta', type=float, default=1.0)
 
 
 args = parser.parse_args()
@@ -76,7 +75,7 @@ test_loader = torch.utils.data.DataLoader(
     dataset_test, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
 # check vae dir exists, if not, create it
-vae_dir = join(args.logdir, args.dataset, 'vae')
+vae_dir = join(args.logdir, args.dataset, 'vqvae')
 if not exists(vae_dir):
     makedirs(vae_dir)
     makedirs(join(vae_dir, 'samples'))
@@ -99,10 +98,7 @@ if not args.noreload and exists(reload_file):
     earlystopping.load_state_dict(state['earlystopping'])
 else:
     if args.model == 'vae':
-        model = VAE((3, RED_SIZE, RED_SIZE), LSIZE)
-    elif args.model == 'pixel_vae':
-        model = PixelVAE((3, RED_SIZE, RED_SIZE), LSIZE,
-                         N_COLOR_DIM, upsample=False)
+        model = VectorQuantizedVAE((3, RED_SIZE, RED_SIZE), 64)
     else:
         raise Exception('Invalid model {}'.format(args.model))
 
@@ -116,21 +112,14 @@ model = model.to(device)
 # Reconstruction + KL divergence losses summed over all elements and batch
 def loss_function(x, out):
     """ VAE loss function """
-    recon_x, mu, logsigma, z = out
+    x_tilde, z_e_x, z_q_x = out
 
-    if args.model.startswith('pixel_vae'):
-        target = (x * (N_COLOR_DIM - 1)).long()
-        BCE = F.cross_entropy(recon_x, target, reduce=False).view(x.size(0), -1).sum(-1)
-        BCE = BCE.mean()
-        BCE /= 3 * RED_SIZE * RED_SIZE
-    else:
-        BCE = F.mse_loss(recon_x, x, size_average=False)
+    rcl = F.mse_loss(x_tilde, x)
+    vql = F.mse_loss(z_q_x, z_e_x.detach())
+    coml = F.mse_loss(z_e_x, z_q_x.detach())
 
-    # true_samples = torch.randn(*z.size()).to(device)
-    # KLD = compute_mmd(z, true_samples)
-    KLD = -0.5 * torch.sum(1 + 2 * logsigma - mu.pow(2) - (2 * logsigma).exp())
-
-    return BCE + KLD, BCE, KLD
+    loss = rcl + vql + args.beta * coml
+    return loss, rcl, vql, coml
 
 def process(data):
     data *= 255
@@ -147,15 +136,17 @@ def train(epoch):
         data = process(data)
         optimizer.zero_grad()
         out = model(data)
-        loss, bce, kld = loss_function(data, out)
+        loss, rcl, vql, coml = loss_function(data, out)
         loss.backward()
         train_loss += loss.item()
         optimizer.step()
         if batch_idx % 20 == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, BCE: {:.3f}, KLD: {:.3f}'.format(
+            print("Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, RCL: {:.6f}, "
+                  "VQL: {:.6f}, COML: {:.6f}".format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader),
-                loss.item() / len(data), bce.item() / len(data), kld.item() / len(data)))
+                loss.item() / len(data), rcl.item() / len(data), vql.item() / len(data),
+                coml.item() / len(data)))
 
     print('====> Epoch: {} Average loss: {:.4f}'.format(
         epoch, train_loss / len(train_loader.dataset)))
@@ -203,11 +194,3 @@ for epoch in range(1, args.epochs + 1):
     if earlystopping.stop:
         print("End of Training because of early stopping at epoch {}".format(epoch))
         break
-
-    if not args.nosamples:
-        with torch.no_grad():
-            sample = torch.randn(16, LSIZE).to(device)
-            sample = model.sample(sample, device).cpu()
-            save_image(sample,
-                       join(vae_dir, 'samples/sample_' + str(epoch - 1) + '.png'),
-                       nrow=4)

@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.utils import save_image
 
-from models.seq_vae import SeqVAE
+from models.seq_vae_cat import SeqVAECat
 from utils.misc import save_checkpoint, IncreaseSize
 from utils.misc import LSIZE, RED_SIZE, N_COLOR_DIM, ASIZE, RSIZE
 from utils.metrics import compute_kl
@@ -24,8 +24,8 @@ from utils.learning import EarlyStopping
 from utils.learning import ReduceLROnPlateau
 from data.loaders import RolloutSequenceDataset
 
-BSIZE = 8
-SEQ_LEN = 16
+BSIZE = 16
+SEQ_LEN = 32
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -35,16 +35,16 @@ def process(obs):
     return obs
 
 def get_loss(obs, reward_target, done_target, recon_obs,
-             obs_latents, obs_logsigmas,
-             trans_latents, trans_logsigmas,
-             rewards, terminals, include_reward, global_prior,
+             obs_latents, obs_embeds,
+             trans_latents, idx_targets,
+             rewards, terminals, include_reward,
              model_name):
     """ Compute losses.
 
     :args obs: (BSIZE, SEQ_LEN, ASIZE, RED_SIZE, RED_SIZE) torch tensor (actual)
     :args recon_obs: (BSIZE, SEQ_LEN, ASIZE, RED_SIZE, RED_SIZE) torch tensor (reconstruction)
-    :args obs_latents: (BSIZE, SEQ_LEN, LSIZE) torch tensor
-    :args obs_logsigmas: (BSIZE, SEQ_LEN, LSIZE) torch tensor
+    :args obs_latents: (BSIZE, SEQ_LEN, LSIZE) torch tensor (z_q_x)
+    :args obs_logsigmas: (BSIZE, SEQ_LEN, LSIZE) torch tensor (z_e_x)
     :args trans_latents: (BSIZE, SEQ_LEN, LSIZE) torch tensor
     :args trans_logsigmas: (BSIZE, SEQ_LEN, LSIZE) torch tensor
     :args rewards: (BSIZE, SEQ_LEN) torch tensor
@@ -60,15 +60,16 @@ def get_loss(obs, reward_target, done_target, recon_obs,
         rcl = (obs - recon_obs) ** 2
     rcl = rcl.view(rcl.size(0), -1)
     rcl = rcl.sum(-1).mean(0)
-    kl = compute_kl(obs_latents, obs_logsigmas, trans_latents,
-                    trans_logsigmas, time_dim=True)
-    if global_prior:
-        kl_global = compute_kl(obs_latents, obs_logsigmas,
-                               torch.zeros_like(obs_latents).to(device),
-                               torch.ones_like(obs_logsigmas).to(device),
-                               time_dim=True)
-    else:
-        kl_global = torch.zeros(1).to(device)
+
+    kl = F.mse_loss(obs_latents, obs_embeds.detach(), reduce=False)
+    kl += F.mse_loss(obs_embeds.detach(), obs_latents, reduce=False)
+    kl = kl.view(kl.size(0), -1)
+    kl = kl.sum(-1).mean(0)
+
+    transl = F.cross_entropy(trans_latents, idx_targets.detach().long(),
+                             reduce=False)
+    transl = transl.view(transl.size(0), -1)
+    transl = transl.sum(-1).mean(0)
 
     terminals, done_target = terminals.view(-1), done_target.view(-1)
     bce = F.binary_cross_entropy_with_logits(terminals, done_target)
@@ -79,12 +80,12 @@ def get_loss(obs, reward_target, done_target, recon_obs,
     else:
         rew = torch.zeros(1).to(device)
 
-    loss = rcl + kl + bce + rew + kl_global
+    loss = rcl + kl + bce + rew + transl
 
-    return dict(loss=loss, rcl=rcl, kl=kl, bce=bce, rew=rew, kl_global=kl_global)
+    return dict(loss=loss, rcl=rcl, kl=kl, bce=bce, rew=rew, transl=transl)
 
 def data_pass(epoch, train, loader, seq_vae, optimizer, include_reward,
-              global_prior, discrete, asize, model_name):
+              discrete, asize, model_name):
     if train:
         seq_vae.train()
     else:
@@ -97,7 +98,7 @@ def data_pass(epoch, train, loader, seq_vae, optimizer, include_reward,
     cum_kl = 0
     cum_bce = 0
     cum_rew = 0
-    cum_kl_g = 0
+    cum_transl = 0
 
     pbar = tqdm(total=len(loader.dataset), desc="Epoch {}".format(epoch))
     for i, data in enumerate(loader):
@@ -118,7 +119,6 @@ def data_pass(epoch, train, loader, seq_vae, optimizer, include_reward,
             out = seq_vae(obs, action, hiddens)
             losses = get_loss(obs, reward, terminal, *out,
                               include_reward=include_reward,
-                              global_prior=global_prior,
                               model_name=model_name)
             optimizer.zero_grad()
             losses['loss'].backward()
@@ -135,14 +135,14 @@ def data_pass(epoch, train, loader, seq_vae, optimizer, include_reward,
         cum_kl += losses['kl'].item()
         cum_bce += losses['bce'].item()
         cum_rew += losses['rew'].item()
-        cum_kl_g += losses['kl_global'].item()
+        cum_transl += losses['transl'].item()
 
         pbar.set_postfix_str("loss={loss:10.6f} rcl={rcl:10.6f} "
                              "kl={kl:10.6f}, bce={bce:10.6f} "
-                             "rew={rew:10.6f}, klg={klg:10.6f}".format(
+                             "rew={rew:10.6f}, transl={transl:10.6f}".format(
                                  loss=cum_loss / (i + 1), rcl=cum_rcl / (i + 1),
                                  kl=cum_kl / (i + 1), bce=cum_bce / (i + 1),
-                                 rew=cum_rew / (i + 1), klg=cum_kl_g / (i + 1)))
+                                 rew=cum_rew / (i + 1), transl=cum_transl / (i + 1)))
         pbar.update(BSIZE)
     pbar.close()
     return cum_loss * BSIZE / len(loader.dataset)
@@ -158,8 +158,6 @@ def main():
     parser.add_argument('--dataset', type=str, default='carracing')
     parser.add_argument('--include_reward', action='store_true',
                         help="Add a reward modelisation term to the loss.")
-    parser.add_argument('--global_prior', action='store_true',
-                        help="Add a global prior")
     parser.add_argument('--model', type=str, default='vae')
     args = parser.parse_args()
 
@@ -189,7 +187,7 @@ def main():
         scheduler.load_state_dict(state['scheduler'])
         earlystopping.load_state_dict(state['earlystopping'])
     else:
-        vae = SeqVAE(asize, args.model)
+        vae = SeqVAECat(asize, args.model, 64, 128)
         optimizer = torch.optim.Adam(vae.parameters(), lr=3e-4)
         scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
         earlystopping = EarlyStopping('min', patience=30)
@@ -213,11 +211,11 @@ def main():
         batch_size=BSIZE, num_workers=8)
 
     train = partial(data_pass, train=True, include_reward=args.include_reward,
-                    global_prior=args.global_prior, loader=train_loader,
+                    loader=train_loader,
                     seq_vae=vae, optimizer=optimizer, discrete=discrete,
                     asize=asize, model_name=args.model)
     test = partial(data_pass, train=False, include_reward=args.include_reward,
-                   global_prior=args.global_prior, loader=test_loader,
+                   loader=test_loader,
                    seq_vae=vae, optimizer=None, discrete=discrete,
                    asize=asize, model_name=args.model)
 

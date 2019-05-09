@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch
 
-from models.mlp import MLP
+from models.base import MLP
 from models.vae import VAE, PixelVAE
 from utils.misc import LSIZE, RED_SIZE, N_COLOR_DIM, RSIZE
 
@@ -59,7 +59,7 @@ class SeqVAE(nn.Module):
             out = self.transition(hiddens[0])
             trans_latent, trans_logsigma = out.chunk(2, 1)
             trans_logsigma = torch.tanh(trans_logsigma)
-            recon = torch.sigmoid(self.vae.decoder(obs_latent))
+            recon = self.vae.decode_train(obs[t], obs_latent)
 
             aux_input = torch.cat((obs_latent, hiddens[0]), -1)
             reward = self.reward(aux_input)
