@@ -100,7 +100,8 @@ else:
     if args.model == 'vae':
         model = VectorQuantizedVAE((3, RED_SIZE, RED_SIZE), 64)
     elif args.model == 'pixel_vae':
-        model = PixelVectorQuantizedVAE((3, RED_SIZE, RED_SIZE), 128)
+        model = PixelVectorQuantizedVAE((3, RED_SIZE, RED_SIZE), 128,
+                                        N_COLOR_DIM)
     else:
         raise Exception('Invalid model {}'.format(args.model))
 
@@ -116,10 +117,10 @@ def loss_function(x, out):
     """ VAE loss function """
     x_tilde, z_e_x, z_q_x = out
 
-    if args.model_name == 'vae':
+    if args.model == 'vae':
         rcl = F.mse_loss(x_tilde, x)
     else:
-        rcl = F.cross_entropy(out, x.long())
+        rcl = F.cross_entropy(x_tilde, (x * (N_COLOR_DIM - 1)).long())
     vql = F.mse_loss(z_q_x, z_e_x.detach())
     coml = F.mse_loss(z_e_x, z_q_x.detach())
 

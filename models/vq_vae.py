@@ -3,6 +3,8 @@ import torch.nn.functional as F
 import torch
 from torch.autograd import Function
 
+import models.pixel_cnn.models as models
+
 class VectorQuantization(Function):
     @staticmethod
     def forward(ctx, inputs, codebook):
@@ -122,20 +124,24 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.img_channels = img_size[0]
 
-        self.deconv1 = nn.ConvTranspose2d(code_dim, 128, 2, stride=2)
-        self.deconv2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
-        self.deconv3 = nn.ConvTranspose2d(64, 32, 2, stride=2)
+        self.deconv1 = nn.ConvTranspose2d(code_dim, 128, 6, stride=2)
+        self.deconv2 = nn.ConvTranspose2d(128, 64, 7, stride=2)
         if out_channels is None:
-            self.deconv4 = nn.ConvTranspose2d(32, img_size[0], 2, stride=2)
+            self.deconv3 = nn.ConvTranspose2d(64, img_size[0], 8, stride=2)
         else:
-            self.deconv4 = nn.ConvTranspose2d(32, out_channels, 2, stride=2)
+            self.deconv3 = nn.ConvTranspose2d(64, out_channels, 8, stride=2)
+        # if out_channels is None:
+        #     self.deconv4 = nn.ConvTranspose2d(32, img_size[0], 2, stride=2)
+        # else:
+        #     self.deconv4 = nn.ConvTranspose2d(32, out_channels, 2, stride=2)
 
     def forward(self, x): # pylint: disable=arguments-differ
         x = F.relu(self.deconv1(x))
         x = F.relu(self.deconv2(x))
-        x = F.relu(self.deconv3(x))
-        reconstruction = self.deconv4(x)
-        return reconstruction
+        x = self.deconv3(x)
+        return x
+        # reconstruction = self.deconv4(x)
+        # return reconstruction
 
 class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
     """ VAE encoder """
@@ -208,15 +214,16 @@ class VectorQuantizedVAE(nn.Module):
 
 class PixelVectorQuantizedVAE(nn.Module):
 
-    def __init__(self, img_size, code_dim, cond_size=None, K=128):
-        super(VectorQuantizedVAE, self).__init__()
+    def __init__(self, img_size, code_dim, n_color_dims,
+                 cond_size=None, K=128):
+        super(PixelVectorQuantizedVAE, self).__init__()
         self.encoder = Encoder(img_size, code_dim, cond_size=cond_size)
         self.codebook = VQEmbedding(K, code_dim)
-        self.decoder = models.CGated(img_size,
-                                     (latent_size,),
-                                     120, num_layers=2,
-                                     n_color_dims=n_color_dims,
-                                     k=5, padding=2)
+        self.decoder = Decoder(img_size, code_dim, out_channels=128)
+        self.pixel_cnn = models.LGated(img_size, 128,
+                                       120, num_layers=2,
+                                       n_color_dims=n_color_dims,
+                                       k=5, padding=2)
         self.img_size = img_size
 
         self.apply(weights_init)
@@ -234,15 +241,17 @@ class PixelVectorQuantizedVAE(nn.Module):
     def decode(self, latents, device):
         z_q_x = self.codebook.embedding(latents).permute(0, 3, 1, 2)  # (B, D, H, W)
         z_q_x = z_q_x.view(z_q_x.size(0), -1)
-        x_tilde = self.decoder.sample(self.img_size, device,
-                                      cond=z_q_x)
+        z = self.decoder(z_q_x)
+        x_tilde = self.pixel_cnn.sample(self.img_size, device,
+                                        cond=z)
         return x_tilde
 
     def to_embedding(self, latents):
         return self.codebook.embedding(latents).permute(0, 3, 1, 2)
 
     def decode_train(self, obs, z_q_x_st):
-        return self.decoder(obs, z_q_x_st)
+        z = self.decoder(z_q_x_st)
+        return self.pixel_cnn(obs, z)
 
     def sample(self, z, device):
         return self.decode(z, device)
@@ -250,5 +259,6 @@ class PixelVectorQuantizedVAE(nn.Module):
     def forward(self, x):
         z_e_x = self.encoder(x)
         z_q_x_st, z_q_x, _ = self.codebook.straight_through(z_e_x)
-        x_tilde = self.decoder(x, z_q_x_st)
+        z = self.decoder(z_q_x_st)
+        x_tilde = self.pixel_cnn(x, z)
         return x_tilde, z_e_x, z_q_x
