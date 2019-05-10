@@ -55,10 +55,10 @@ transform = transforms.Compose([
 dataset_folder = join('datasets', args.dataset)
 dataset_train = RolloutObservationDataset(dataset_folder,
                                           transform, train=True,
-                                          buffer_size=5)
+                                          buffer_size=100)
 dataset_test = RolloutObservationDataset(dataset_folder,
                                          transform, train=False,
-                                         buffer_size=5)
+                                         buffer_size=100)
 train_loader = torch.utils.data.DataLoader(
     dataset_train, batch_size=args.batch_size, shuffle=True, num_workers=2)
 test_loader = torch.utils.data.DataLoader(
@@ -102,16 +102,17 @@ else:
                            lr=np.sqrt(args.batch_size / 32) * 1e-3)
     scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
     earlystopping = EarlyStopping('min', patience=30)
+model = model.to(device)
 
 # Reconstruction + KL divergence losses summed over all elements and batch
 def loss_function(latents, out):
     """ VAE loss function """
-    loss = F.cross_entropy(out, latents.long())
+    loss = F.cross_entropy(out, latents.detach())
     return loss
 
 def to_latent(x):
     with torch.no_grad():
-        latents = vae.encode(x).unsqueeze(1)
+        latents = vae.encode(x)[0].unsqueeze(1)
     return latents
 
 def process(data):
@@ -129,7 +130,7 @@ def train(epoch):
         data = process(data)
         optimizer.zero_grad()
         latents = to_latent(data)
-        out = model(latents)
+        out = model(latents.float())
         loss = loss_function(latents, out)
         loss.backward()
         train_loss += loss.item()
@@ -154,7 +155,7 @@ def test():
             data = data.to(device)
             data = process(data)
             latents = to_latent(data)
-            out = model(latents)
+            out = model(latents.float())
             test_loss += loss_function(latents, out).item()
 
     test_loss /= len(test_loader.dataset)

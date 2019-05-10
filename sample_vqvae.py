@@ -61,7 +61,7 @@ print("Loading Prior at epoch {}"
           state['precision']
       ))
 prior = torch.load(join(prior_dir, 'model_best.pt'), map_location=device)
-latents = prior.sample(args.n, (1,) + latent_size, device).long()
+latents = prior.sample(args.n, (1,) + latent_size, device).long().squeeze(1)
 samples = vae.sample(latents, device)
 print(samples.size())
 
