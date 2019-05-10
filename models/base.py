@@ -56,3 +56,18 @@ class SimpleConv(nn.Module):
         if self.output_activation is not None:
             x = self.output_activation(x)
         return x
+
+class ResBlock(nn.Module):
+    def __init__(self, dim):
+        super(ResBlock, self).__init__()
+        self.block = nn.Sequential(
+            nn.ReLU(True),
+            nn.Conv2d(dim, dim, 3, 1, 1),
+            nn.BatchNorm2d(dim),
+            nn.ReLU(True),
+            nn.Conv2d(dim, dim, 1),
+            nn.BatchNorm2d(dim)
+        )
+
+    def forward(self, x):
+        return x + self.block(x)

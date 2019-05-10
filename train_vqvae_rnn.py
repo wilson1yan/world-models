@@ -36,8 +36,8 @@ BSIZE = 16
 SEQ_LEN = 32
 epochs = 1000
 
-latent_shape = (4, 4)
-code_dim = 64
+latent_shape = (16, 16)
+code_dim = 128
 K = 128
 
 # Loading VAE

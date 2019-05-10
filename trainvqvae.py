@@ -12,7 +12,7 @@ from torch.nn import functional as F
 from torchvision import transforms
 from torchvision.utils import save_image
 
-from models.vq_vae import VectorQuantizedVAE, PixelVectorQuantizedVAE
+from models.vq_vae import VectorQuantizedVAE, PixelVectorQuantizedVAE, VectorQuantizedVAELarge
 
 from utils.misc import save_checkpoint, IncreaseSize
 from utils.misc import LSIZE, RED_SIZE, N_COLOR_DIM
@@ -99,6 +99,8 @@ if not args.noreload and exists(reload_file):
 else:
     if args.model == 'vae':
         model = VectorQuantizedVAE((3, RED_SIZE, RED_SIZE), 64)
+    elif args.model == 'vae_large':
+        model = VectorQuantizedVAELarge((3, RED_SIZE, RED_SIZE), 128)
     elif args.model == 'pixel_vae':
         model = PixelVectorQuantizedVAE((3, RED_SIZE, RED_SIZE), 128,
                                         N_COLOR_DIM)
@@ -117,7 +119,7 @@ def loss_function(x, out):
     """ VAE loss function """
     x_tilde, z_e_x, z_q_x = out
 
-    if args.model == 'vae':
+    if args.model == 'vae' or args.model == 'vae_large':
         rcl = F.mse_loss(x_tilde, x)
     else:
         rcl = F.cross_entropy(x_tilde, (x * (N_COLOR_DIM - 1)).long())

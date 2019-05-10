@@ -4,6 +4,7 @@ import torch
 from torch.autograd import Function
 
 import models.pixel_cnn.models as models
+from models.base import ResBlock
 
 class VectorQuantization(Function):
     @staticmethod
@@ -102,22 +103,6 @@ class VQEmbedding(nn.Module):
         z_q_x_bar = z_q_x_bar_.permute(0, 3, 1, 2).contiguous()
         return z_q_x, z_q_x_bar, indices
 
-
-class ResBlock(nn.Module):
-    def __init__(self, dim):
-        super(ResBlock, self).__init__()
-        self.block = nn.Sequential(
-            nn.ReLU(True),
-            nn.Conv2d(dim, dim, 3, 1, 1),
-            nn.BatchNorm2d(dim),
-            nn.ReLU(True),
-            nn.Conv2d(dim, dim, 1),
-            nn.BatchNorm2d(dim)
-        )
-
-    def forward(self, x):
-        return x + self.block(x)
-
 class Decoder(nn.Module):
     """ VAE decoder """
     def __init__(self, img_size, code_dim, out_channels=None):
@@ -153,7 +138,7 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
 
         self.conv1 = nn.Conv2d(img_size[0], 128, 3, stride=2, padding=1)
         self.conv2 = nn.Conv2d(128, 128, 3, stride=1, padding=0)
-        self.conv3 = nn.Conv2d(128, 128, 3, stride=2, padding=1)
+        self.conv3 = nn.Conv2d(128, 128, 3, stride=1, padding=0)
         self.conv4 = nn.Conv2d(128, 128, 3, stride=2, padding=1)
         self.conv5 = nn.Conv2d(128, code_dim, 3, stride=2, padding=1)
 
@@ -172,6 +157,75 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
         else:
             x = F.relu(self.conv5(x))
         return x
+
+class VectorQuantizedVAELarge(nn.Module):
+    def __init__(self, img_size, dim, K=128):
+        super(VectorQuantizedVAELarge, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv2d(img_size[0], dim, 4, 2, 1),
+            nn.BatchNorm2d(dim),
+            nn.ReLU(True),
+            nn.Conv2d(dim, dim, 4, 2, 1),
+            # nn.BatchNorm2d(dim),
+            # nn.ReLU(True),
+            # nn.Conv2d(dim, dim, 4, 2, 1),
+            # nn.BatchNorm2d(dim),
+            # nn.ReLU(True),
+            # nn.Conv2d(dim, dim, 4, 2, 1),
+            ResBlock(dim),
+            ResBlock(dim),
+        )
+
+        self.codebook = VQEmbedding(K, dim)
+
+        self.decoder = nn.Sequential(
+            ResBlock(dim),
+            ResBlock(dim),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(dim, dim, 4, 2, 1),
+            nn.BatchNorm2d(dim),
+            nn.ReLU(True),
+            # nn.ConvTranspose2d(dim, dim, 4, 2, 1),
+            # nn.BatchNorm2d(dim),
+            # nn.ReLU(True),
+            # nn.ConvTranspose2d(dim, dim, 4, 2, 1),
+            # nn.BatchNorm2d(dim),
+            # nn.ReLU(True),
+            nn.ConvTranspose2d(dim, img_size[0], 4, 2, 1),
+            nn.Sigmoid()
+        )
+
+        self.apply(weights_init)
+
+    def encode_train(self, x):
+        z_e_x = self.encoder(x)
+        z_q_x_st, z_q_x, indices = self.codebook.straight_through(z_e_x)
+        return z_e_x, z_q_x_st, z_q_x, indices
+
+    def decode_train(self, obs, z_q_x_st):
+        return self.decoder(z_q_x_st)
+
+    def encode(self, x):
+        z_e_x = self.encoder(x)
+        latents = self.codebook(z_e_x)
+        return latents, None
+
+    def to_embedding(self, latents):
+        return self.codebook.embedding(latents).permute(0, 3, 1, 2)
+
+    def decode(self, latents):
+        z_q_x = self.codebook.embedding(latents).permute(0, 3, 1, 2)  # (B, D, H, W)
+        x_tilde = self.decoder(z_q_x)
+        return x_tilde
+
+    def sample(self, z, device):
+        return self.decode(z)
+
+    def forward(self, x):
+        z_e_x = self.encoder(x)
+        z_q_x_st, z_q_x, indices = self.codebook.straight_through(z_e_x)
+        x_tilde = self.decoder(z_q_x_st)
+        return x_tilde, z_e_x, z_q_x
 
 class VectorQuantizedVAE(nn.Module):
     def __init__(self, img_size, code_dim, cond_size=None, K=128):
