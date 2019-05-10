@@ -212,12 +212,12 @@ class PixelVectorQuantizedVAE(nn.Module):
         super(VectorQuantizedVAE, self).__init__()
         self.encoder = Encoder(img_size, code_dim, cond_size=cond_size)
         self.codebook = VQEmbedding(K, code_dim)
-        self.decoder = Decoder(img_size, code_dim)
-            self.pixel_cnn = models.CGated(img_size,
-                                           (latent_size,),
-                                           120, num_layers=4,
-                                           n_color_dims=n_color_dims,
-                                           k=7, padding=3)
+        self.decoder = models.CGated(img_size,
+                                     (latent_size,),
+                                     120, num_layers=2,
+                                     n_color_dims=n_color_dims,
+                                     k=5, padding=2)
+        self.img_size = img_size
 
         self.apply(weights_init)
 
@@ -231,22 +231,24 @@ class PixelVectorQuantizedVAE(nn.Module):
         z_q_x_st, z_q_x, indices = self.codebook.straight_through(z_e_x)
         return z_e_x, z_q_x_st, z_q_x, indices
 
-    def decode(self, latents):
+    def decode(self, latents, device):
         z_q_x = self.codebook.embedding(latents).permute(0, 3, 1, 2)  # (B, D, H, W)
-        x_tilde = self.decoder(z_q_x)
+        z_q_x = z_q_x.view(z_q_x.size(0), -1)
+        x_tilde = self.decoder.sample(self.img_size, device,
+                                      cond=z_q_x)
         return x_tilde
 
     def to_embedding(self, latents):
         return self.codebook.embedding(latents).permute(0, 3, 1, 2)
 
     def decode_train(self, obs, z_q_x_st):
-        return self.decoder(z_q_x_st)
+        return self.decoder(obs, z_q_x_st)
 
     def sample(self, z, device):
-        return self.decode(z)
+        return self.decode(z, device)
 
     def forward(self, x):
         z_e_x = self.encoder(x)
         z_q_x_st, z_q_x, _ = self.codebook.straight_through(z_e_x)
-        x_tilde = self.decoder(z_q_x_st)
+        x_tilde = self.decoder(x, z_q_x_st)
         return x_tilde, z_e_x, z_q_x
