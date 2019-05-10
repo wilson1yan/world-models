@@ -80,7 +80,28 @@ prior_dir = join(args.logdir, args.dataset, 'vqprior')
 if not exists(prior_dir):
     makedirs(prior_dir)
 
-model = Gated((1,) + latent_size, 64, 1, 128, k=3, padding=1)
+reload_file = join(prior_dir, 'best.tar')
+if not args.noreload and exists(reload_file):
+    state = torch.load(reload_file)
+    print("Reloading model at epoch {}"
+          ", with test error {}".format(
+              state['epoch'],
+              state['precision']))
+    model = torch.load(join(prior_dir, 'model_best.pt'))
+    optimizer = optim.Adam(model.parameters(),
+                           lr=np.sqrt(args.batch_size / 32) * 1e-3)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
+    earlystopping = EarlyStopping('min', patience=30)
+
+    optimizer.load_state_dict(state['optimizer'])
+    scheduler.load_state_dict(state['scheduler'])
+    earlystopping.load_state_dict(state['earlystopping'])
+else:
+    model = Gated((1,) + latent_size, 64, 1, 128, k=3, padding=1)
+    optimizer = optim.Adam(model.parameters(),
+                           lr=np.sqrt(args.batch_size / 32) * 1e-3)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
+    earlystopping = EarlyStopping('min', patience=30)
 
 # Reconstruction + KL divergence losses summed over all elements and batch
 def loss_function(latents, out):
