@@ -205,3 +205,48 @@ class VectorQuantizedVAE(nn.Module):
         z_q_x_st, z_q_x, _ = self.codebook.straight_through(z_e_x)
         x_tilde = self.decoder(z_q_x_st)
         return x_tilde, z_e_x, z_q_x
+
+class PixelVectorQuantizedVAE(nn.Module):
+
+    def __init__(self, img_size, code_dim, cond_size=None, K=128):
+        super(VectorQuantizedVAE, self).__init__()
+        self.encoder = Encoder(img_size, code_dim, cond_size=cond_size)
+        self.codebook = VQEmbedding(K, code_dim)
+        self.decoder = Decoder(img_size, code_dim)
+            self.pixel_cnn = models.CGated(img_size,
+                                           (latent_size,),
+                                           120, num_layers=4,
+                                           n_color_dims=n_color_dims,
+                                           k=7, padding=3)
+
+        self.apply(weights_init)
+
+    def encode(self, x, cond=None):
+        z_e_x = self.encoder(x, cond=cond)
+        latents = self.codebook(z_e_x)
+        return latents, None
+
+    def encode_train(self, x, cond=None):
+        z_e_x = self.encoder(x, cond=cond)
+        z_q_x_st, z_q_x, indices = self.codebook.straight_through(z_e_x)
+        return z_e_x, z_q_x_st, z_q_x, indices
+
+    def decode(self, latents):
+        z_q_x = self.codebook.embedding(latents).permute(0, 3, 1, 2)  # (B, D, H, W)
+        x_tilde = self.decoder(z_q_x)
+        return x_tilde
+
+    def to_embedding(self, latents):
+        return self.codebook.embedding(latents).permute(0, 3, 1, 2)
+
+    def decode_train(self, obs, z_q_x_st):
+        return self.decoder(z_q_x_st)
+
+    def sample(self, z, device):
+        return self.decode(z)
+
+    def forward(self, x):
+        z_e_x = self.encoder(x)
+        z_q_x_st, z_q_x, _ = self.codebook.straight_through(z_e_x)
+        x_tilde = self.decoder(z_q_x_st)
+        return x_tilde, z_e_x, z_q_x

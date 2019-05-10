@@ -99,6 +99,8 @@ if not args.noreload and exists(reload_file):
 else:
     if args.model == 'vae':
         model = VectorQuantizedVAE((3, RED_SIZE, RED_SIZE), 64)
+    elif args.model == 'pixel_vae':
+
     else:
         raise Exception('Invalid model {}'.format(args.model))
 
