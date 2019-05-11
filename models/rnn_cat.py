@@ -4,6 +4,8 @@ import torch.nn.functional as F
 
 import numpy as np
 
+from models.base import SimpleConv
+
 def cat_loss(latent_next_obs, dist_outs):
     loss = F.cross_entropy(dist_outs, latent_next_obs, reduce=False)
     loss = loss.view(loss.size(0), -1)
@@ -15,6 +17,7 @@ class RNNCat(nn.Module):
     def __init__(self, latent_shape, code_dim, K, actions, hiddens):
         super(RNNCat, self).__init__()
         lsize = int(np.prod(latent_shape) * code_dim)
+        # self.pre_rnn = SimpleConv(code_dim, 64, reduce_factor=2)
         self.rnn = nn.LSTM(lsize + actions, hiddens)
         self.output_layer = nn.Linear(hiddens, np.prod(latent_shape) * K + 2)
 
@@ -26,13 +29,16 @@ class RNNCat(nn.Module):
     def forward(self, actions, latents):
         seq_len, bs = actions.size(0), actions.size(1)
         latents = latents.contiguous()
-        latents_flat = latents.view(latents.size(0), latents.size(1), -1)
+        # latents = latents.view(seq_len * bs, *latents.size()[2:])
+        # latents = self.pre_rnn(latents)
+        latents_flat = latents.view(seq_len, bs, -1)
 
         ins = torch.cat([actions, latents_flat], 2)
         outs, _ = self.rnn(ins)
         outs = self.output_layer(outs)
         dist_outs = outs[:, :, :-2]
-        dist_outs = dist_outs.view(dist_outs.size(0), dist_outs.size(1), *self.latent_shape, self.K)
+        dist_outs = dist_outs.view(dist_outs.size(0), dist_outs.size(1),
+                                   *self.latent_shape, self.K)
         dist_outs = dist_outs.permute(1, 4, 0, 2, 3) # B x K x SEQ x N_LATENTS
 
         rs = outs[:, :, -2]

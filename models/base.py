@@ -25,36 +25,23 @@ class MLP(nn.Module):
 
 
 class SimpleConv(nn.Module):
-    def __init__(self, in_channels, n_filters, n_layers, output_channels=None,
-                 output_activation=None):
+    def __init__(self, in_channels, n_filters, reduce_factor=0):
         super(SimpleConv, self).__init__()
         self.n_filters = n_filters
-        self.n_layers = n_layers
-        self.output_channels = output_channels
-        self.output_activation = output_activation
 
         layers = []
-        c = in_channels
-        for _ in range(n_layers):
-            layers.append(nn.Conv2d(c, n_filters, 3, padding=1))
+        layers.append(nn.Conv2d(in_channels, n_filters, 3, padding=1))
+        layers.append(nn.ReLU())
+        c = n_filters
+        for _ in range(reduce_factor):
+            layers.append(nn.Conv2d(c, n_filters, 3, padding=1, stride=2))
             layers.append(nn.ReLU())
             c = n_filters
+        layers.pop()
         self.process = nn.Sequential(*layers)
-
-        if output_channels is not None:
-            self.output_layer = nn.Conv2d(c, output_channels)
-        else:
-            self.output_layer = nn.Linear(4*4*n_filters, 1)
 
     def forward(self, x):
         x = self.process(x)
-
-        if self.output_channels is None:
-            x = x.view(x.size(0), -1)
-        x = self.output_layer(x)
-
-        if self.output_activation is not None:
-            x = self.output_activation(x)
         return x
 
 class ResBlock(nn.Module):

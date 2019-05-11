@@ -40,11 +40,8 @@ latent_shape = (16, 16)
 code_dim = 128
 K = 128
 
-# discrete = True
-# action_dim = 18
-
-discrete = False
-action_dim = 3
+discrete = True
+action_dim = 18
 
 # Loading VAE
 vae_dir = join(args.logdir, args.dataset, 'vqvae')
