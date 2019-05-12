@@ -35,10 +35,9 @@ def process(obs):
     return obs
 
 def get_loss(obs, reward_target, done_target, recon_obs,
-             obs_latents, obs_embeds,
-             trans_latents, idx_targets,
-             rewards, terminals, include_reward,
-             model_name):
+             obs_latents, obs_log_probs,
+             trans_latents,
+             rewards, terminals, include_reward):
     """ Compute losses.
 
     :args obs: (BSIZE, SEQ_LEN, ASIZE, RED_SIZE, RED_SIZE) torch tensor (actual)
@@ -52,24 +51,12 @@ def get_loss(obs, reward_target, done_target, recon_obs,
 
     :returns: dictionary of losses
     """
-    if model_name == 'pixel_vae':
-        target = (obs * (N_COLOR_DIM - 1)).long()
-        recon_obs = torch.transpose(recon_obs, 1, 2)
-        rcl = F.cross_entropy(recon_obs, target, reduce=False)
-    else:
-        rcl = (obs - recon_obs) ** 2
+    rcl = (obs - recon_obs) ** 2
     rcl = rcl.view(rcl.size(0), -1)
     rcl = rcl.sum(-1).mean(0)
 
-    kl = F.mse_loss(obs_latents, obs_embeds.detach(), reduce=False)
-    kl += F.mse_loss(obs_embeds.detach(), obs_latents, reduce=False)
-    kl = kl.view(kl.size(0), -1)
-    kl = kl.sum(-1).mean(0)
-
-    transl = F.cross_entropy(trans_latents, idx_targets.detach().long(),
-                             reduce=False)
-    transl = transl.view(transl.size(0), -1)
-    transl = transl.sum(-1).mean(0)
+    kl = obs_log_probs.exp() * (obs_log_probs - trans_latents)
+    kl = kl.view(kl.size(0), -1).sum(-1).mean(0)
 
     terminals, done_target = terminals.view(-1), done_target.view(-1)
     bce = F.binary_cross_entropy_with_logits(terminals, done_target)
@@ -80,12 +67,12 @@ def get_loss(obs, reward_target, done_target, recon_obs,
     else:
         rew = torch.zeros(1).to(device)
 
-    loss = rcl + kl + bce + rew + transl
+    loss = rcl + kl + bce + rew
 
-    return dict(loss=loss, rcl=rcl, kl=kl, bce=bce, rew=rew, transl=transl)
+    return dict(loss=loss, rcl=rcl, kl=kl, bce=bce, rew=rew)
 
 def data_pass(epoch, train, loader, seq_vae, optimizer, include_reward,
-              discrete, asize, model_name):
+              discrete, asize):
     if train:
         seq_vae.train()
     else:
@@ -98,7 +85,6 @@ def data_pass(epoch, train, loader, seq_vae, optimizer, include_reward,
     cum_kl = 0
     cum_bce = 0
     cum_rew = 0
-    cum_transl = 0
 
     pbar = tqdm(total=len(loader.dataset), desc="Epoch {}".format(epoch))
     for i, data in enumerate(loader):
@@ -118,8 +104,7 @@ def data_pass(epoch, train, loader, seq_vae, optimizer, include_reward,
         if train:
             out = seq_vae(obs, action, hiddens)
             losses = get_loss(obs, reward, terminal, *out,
-                              include_reward=include_reward,
-                              model_name=model_name)
+                              include_reward=include_reward)
             optimizer.zero_grad()
             losses['loss'].backward()
             optimizer.step()
@@ -127,22 +112,21 @@ def data_pass(epoch, train, loader, seq_vae, optimizer, include_reward,
             with torch.no_grad():
                 out = seq_vae(obs, action, hiddens)
                 losses = get_loss(obs, reward, terminal, *out,
-                                  include_reward=include_reward,
-                                  global_prior=global_prior,
-                                  model_name=model_name)
+                                  include_reward=include_reward)
         cum_loss += losses['loss'].item()
         cum_rcl += losses['rcl'].item()
         cum_kl += losses['kl'].item()
         cum_bce += losses['bce'].item()
         cum_rew += losses['rew'].item()
-        cum_transl += losses['transl'].item()
+
+        seq_vae.anneal()
 
         pbar.set_postfix_str("loss={loss:10.6f} rcl={rcl:10.6f} "
                              "kl={kl:10.6f}, bce={bce:10.6f} "
-                             "rew={rew:10.6f}, transl={transl:10.6f}".format(
+                             "rew={rew:10.6f}, t={t:10.6f}".format(
                                  loss=cum_loss / (i + 1), rcl=cum_rcl / (i + 1),
                                  kl=cum_kl / (i + 1), bce=cum_bce / (i + 1),
-                                 rew=cum_rew / (i + 1), transl=cum_transl / (i + 1)))
+                                 rew=cum_rew / (i + 1), t=seq_vae.vae.temperature))
         pbar.update(BSIZE)
     pbar.close()
     return cum_loss * BSIZE / len(loader.dataset)
@@ -158,16 +142,15 @@ def main():
     parser.add_argument('--dataset', type=str, default='carracing')
     parser.add_argument('--include_reward', action='store_true',
                         help="Add a reward modelisation term to the loss.")
-    parser.add_argument('--model', type=str, default='vae')
     args = parser.parse_args()
 
     torch.manual_seed(123)
     torch.backends.cudnn.benchmark = True
 
-    asize = 6 if args.dataset == 'pong' else 3
-    discrete = args.dataset == 'pong'
+    asize = 18
+    discrete = True
 
-    vae_dir = join(args.logdir, args.dataset, 'seq_vae')
+    vae_dir = join(args.logdir, args.dataset, 'seq_vae_cat')
     if not exists(vae_dir):
         makedirs(vae_dir)
 
@@ -187,7 +170,7 @@ def main():
         scheduler.load_state_dict(state['scheduler'])
         earlystopping.load_state_dict(state['earlystopping'])
     else:
-        vae = SeqVAECat(asize, args.model, 64, 128)
+        vae = SeqVAECat(asize, 8)
         optimizer = torch.optim.Adam(vae.parameters(), lr=3e-4)
         scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
         earlystopping = EarlyStopping('min', patience=30)
@@ -213,11 +196,11 @@ def main():
     train = partial(data_pass, train=True, include_reward=args.include_reward,
                     loader=train_loader,
                     seq_vae=vae, optimizer=optimizer, discrete=discrete,
-                    asize=asize, model_name=args.model)
+                    asize=asize)
     test = partial(data_pass, train=False, include_reward=args.include_reward,
                    loader=test_loader,
                    seq_vae=vae, optimizer=None, discrete=discrete,
-                   asize=asize, model_name=args.model)
+                   asize=asize)
 
     cur_best = None
     for e in range(args.epochs):

@@ -3,12 +3,18 @@ Simulated carracing environment.
 """
 import argparse
 from os.path import join, exists
+
 import torch
-import torchvision.transforms as transforms
 from torch.distributions.categorical import Categorical
+import torchvision.transforms as transforms
+from torchvision.utils import save_image
+
 import gym
 from gym import spaces
-from utils.misc import LSIZE, RSIZE, RED_SIZE, IncreaseSize, N_COLOR_DIM
+
+from models.seq_vae import SeqVAE
+from models.mdrnn import MDRNNCell
+from utils.misc import LSIZE, RSIZE, RED_SIZE, N_COLOR_DIM, IncreaseSize
 from data.loaders import RolloutObservationDataset
 
 import numpy as np
@@ -24,15 +30,9 @@ class SimulatedBoxing(gym.Env): # pylint: disable=too-many-instance-attributes
     loaded.
     """
     def __init__(self, directory):
-        vae_folder = join(directory, 'vqvae')
-        rnn_folder = join(directory, 'cat_rnn')
-        if args.mode != 'cm':
-            rnn_folder += '_{}'.format(args.mode)
-
+        vae_folder = join(directory, 'seq_vae_cat')
         vae_file = join(vae_folder, 'best.tar')
-        rnn_file = join(rnn_folder, 'best.tar')
         assert exists(vae_file), "No VAE model in the directory..."
-        assert exists(rnn_file), "No RNN model in the directory..."
 
         # spaces
         self.action_space = spaces.Discrete(18)
@@ -42,37 +42,30 @@ class SimulatedBoxing(gym.Env): # pylint: disable=too-many-instance-attributes
         self.device = torch.device('cuda')
 
         # load VAE
-        vae_state = torch.load(vae_file, map_location=self.device)
+        vae_state = torch.load(vae_file)
         print("Loading VAE at epoch {}, "
               "with test error {}...".format(
                   vae_state['epoch'], vae_state['precision']))
-        self._vae = torch.load(join(vae_folder, 'model_best.pt'), map_location=self.device)
-
-        # load MDRNN
-        rnn_state = torch.load(rnn_file, map_location=self.device)
-        print("Loading CatRNN at epoch {}, "
-              "with test error {}...".format(
-                  rnn_state['epoch'], rnn_state['precision']))
-        self._rnn = torch.load(join(rnn_folder, 'model_best.pt'), map_location=self.device)
+        self._vae = torch.load(join(vae_folder, 'model_best.pt')).to(self.device)
 
         transform = transforms.Compose([
             transforms.ToTensor(),
-            IncreaseSize(game=args.dataset, n_expand=2),
+            IncreaseSize(game='boxing', n_expand=2),
             transforms.ToPILImage(),
             transforms.Resize((RED_SIZE, RED_SIZE)),
             transforms.ToTensor(),
         ])
-        dataset = RolloutObservationDataset(join('datasets', args.dataset),
-                                            transform, train=False,
-                                            buffer_size=10)
-        loader = torch.utils.data.DataLoader(
-            dataset, batch_size=1, shuffle=True
+
+        self._dataset = RolloutObservationDataset(join('datasets', 'boxing'),
+                                                  transform, train=True,
+                                                  buffer_size=10)
+        self._loader = torch.utils.data.DataLoader(
+            self._dataset, batch_size=1, shuffle=True
         )
-        self._loader = loader
 
         # init state
-        self._lstate = torch.randn(1, LSIZE)
-        self._hstate = 2 * [torch.zeros(1, RSIZE)]
+        self._lstate = torch.randn(1, LSIZE).to(self.device)
+        self._hstate = 2 * [torch.zeros(1, RSIZE).to(self.device)]
 
         # obs
         self._obs = None
@@ -90,8 +83,7 @@ class SimulatedBoxing(gym.Env): # pylint: disable=too-many-instance-attributes
         obs = next(iter(self._loader)).to(self.device)
         obs *= 255
         obs = torch.floor(obs / (2 ** 8 / N_COLOR_DIM)) / (N_COLOR_DIM - 1)
-        self._lstate = self._vae.encode(obs)[0]
-
+        self._lstate = self._vae.encode(obs, self._hstate[0])[0]
 
         # also reset monitor
         if not self.monitor:
@@ -105,21 +97,9 @@ class SimulatedBoxing(gym.Env): # pylint: disable=too-many-instance-attributes
         with torch.no_grad():
             action = torch.zeros(1, 18).to(self.device)
             action[0, a] = 1
-            lstate_embed = self._vae.to_embedding(self._lstate).contiguous()
-            lstate_embed = lstate_embed.view(lstate_embed.size(0), -1)
-            dist_outs, r, d, n_h = self._rnn(action, lstate_embed, self._hstate)
-
-            if args.mode == 'cm':
-                dist_outs = dist_outs.permute(0, 2, 3, 1)
-                dist = Categorical(logits=dist_outs)
-                self._lstate = dist.sample()
-            elif args.mode == 'st':
-                self._lstate = self._vae.codebook(dist_outs)
-            else:
-                self._lstate = torch.round(dist_outs).long()
-            self._hstate = n_h
-
-            self._obs = self._vae.sample(self._lstate, self.device)
+            self._lstate, r, d, self._hstate = self._vae.step(self._lstate, action,
+                                                              self._hstate, self.device)
+            self._obs = self._vae.decode(self._lstate, self.device)
             np_obs = self._obs.cpu().numpy()
             np_obs = np.clip(np_obs, 0, 1) * 255
             np_obs = np.transpose(np_obs, (0, 2, 3, 1))
@@ -127,7 +107,7 @@ class SimulatedBoxing(gym.Env): # pylint: disable=too-many-instance-attributes
             np_obs = np_obs.astype(np.uint8)
             self._visual_obs = np_obs
 
-            return np_obs, r.item(), d.item() > 0
+            return np_obs, r.item(), False
 
     def render(self): # pylint: disable=arguments-differ
         """ Rendering """
@@ -145,10 +125,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--logdir', type=str, help='Directory from which MDRNN and VAE are '
                         'retrieved.', default='logs')
-    parser.add_argument('--dataset', type=str, default='boxing')
-    parser.add_argument('--mode', type=str, default='cm')
+    parser.add_argument('--dataset', type=str, default='carracing')
     args = parser.parse_args()
-    env = SimulatedBoxing(join(args.logdir, args.dataset))
+    env = SimulatedBoxing(join(args.logdir, 'boxing'))
 
     env.reset()
     keys_pressed = []

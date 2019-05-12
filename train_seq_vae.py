@@ -24,8 +24,8 @@ from utils.learning import EarlyStopping
 from utils.learning import ReduceLROnPlateau
 from data.loaders import RolloutSequenceDataset
 
-BSIZE = 8
-SEQ_LEN = 16
+BSIZE = 16
+SEQ_LEN = 32
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -166,8 +166,8 @@ def main():
     torch.manual_seed(123)
     torch.backends.cudnn.benchmark = True
 
-    asize = 6 if args.dataset == 'pong' else 3
-    discrete = args.dataset == 'pong'
+    asize = 18
+    discrete = True
 
     vae_dir = join(args.logdir, args.dataset, 'seq_vae')
     if not exists(vae_dir):

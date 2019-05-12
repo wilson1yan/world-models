@@ -25,9 +25,7 @@ class SimulatedBoxing(gym.Env): # pylint: disable=too-many-instance-attributes
     """
     def __init__(self, directory):
         vae_folder = join(directory, 'vqvae')
-        rnn_folder = join(directory, 'cat_rnn')
-        if args.mode != 'cm':
-            rnn_folder += '_{}'.format(args.mode)
+        rnn_folder = join(directory, 'cat_rnn_st')
 
         vae_file = join(vae_folder, 'best.tar')
         rnn_file = join(rnn_folder, 'best.tar')
@@ -108,15 +106,7 @@ class SimulatedBoxing(gym.Env): # pylint: disable=too-many-instance-attributes
             lstate_embed = self._vae.to_embedding(self._lstate).contiguous()
             lstate_embed = lstate_embed.view(lstate_embed.size(0), -1)
             dist_outs, r, d, n_h = self._rnn(action, lstate_embed, self._hstate)
-
-            if args.mode == 'cm':
-                dist_outs = dist_outs.permute(0, 2, 3, 1)
-                dist = Categorical(logits=dist_outs)
-                self._lstate = dist.sample()
-            elif args.mode == 'st':
-                self._lstate = self._vae.codebook(dist_outs)
-            else:
-                self._lstate = torch.round(dist_outs).long()
+            self._lstate = self._vae.codebook(dist_outs)
             self._hstate = n_h
 
             self._obs = self._vae.sample(self._lstate, self.device)
@@ -146,11 +136,12 @@ if __name__ == '__main__':
     parser.add_argument('--logdir', type=str, help='Directory from which MDRNN and VAE are '
                         'retrieved.', default='logs')
     parser.add_argument('--dataset', type=str, default='boxing')
-    parser.add_argument('--mode', type=str, default='cm')
     args = parser.parse_args()
     env = SimulatedBoxing(join(args.logdir, args.dataset))
 
     env.reset()
+    action = np.array([0])
+
     keys_pressed = []
 
     def get_action():
@@ -193,6 +184,7 @@ if __name__ == '__main__':
 
     def on_key_press(event):
         """ Defines key pressed behavior """
+        print(event.key)
         keys_pressed.append(event.key)
 
 

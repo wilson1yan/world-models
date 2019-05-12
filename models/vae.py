@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import models.pixel_cnn.models as models
 from models.made import MADE
 from models.spatial_softmax import SpatialSoftmax
+from models.base import ResBlock
 
 class Decoder(nn.Module):
     """ VAE decoder """
@@ -35,6 +36,36 @@ class Decoder(nn.Module):
         x = F.relu(self.deconv3(x))
         reconstruction = self.deconv4(x)
         return reconstruction
+
+class DecoderLarge(nn.Module):
+    """ VAE decoder """
+    def __init__(self, img_size, latent_size, out_channels=None):
+        super(DecoderLarge, self).__init__()
+        self.latent_size = latent_size
+        self.img_channels = img_size[0]
+        dim = 128
+
+        self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(1024, dim, 5, stride=2),
+            ResBlock(dim),
+            ResBlock(dim),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(128, 64, 5, stride=2),
+            nn.BatchNorm2d(64),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(64, 32, 6, stride=2),
+            nn.BatchNorm2d(32),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(32, img_size[0] if out_channels is None else out_channels,
+                               6, stride=2)
+        )
+
+        self.fc1 = nn.Linear(latent_size, 1024)
+
+    def forward(self, x): # pylint: disable=arguments-differ
+        x = F.relu(self.fc1(x))
+        x = x.unsqueeze(-1).unsqueeze(-1)
+        return self.decoder(x)
 
 class Identity(nn.Module):
 
@@ -79,6 +110,49 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
 
         return mu, logsigma
 
+class EncoderLarge(nn.Module): # pylint: disable=too-many-instance-attributes
+    """ VAE encoder """
+    def __init__(self, img_size, latent_size, cond_size=None):
+        super(EncoderLarge, self).__init__()
+        self.latent_size = latent_size
+        self.img_channels = img_size[0]
+        self.cond_size = cond_size
+        dim = 128
+        self.encoder = nn.Sequential(
+            nn.Conv2d(img_size[0], dim, 4, 2, 1),
+            nn.BatchNorm2d(dim),
+            nn.ReLU(True),
+            nn.Conv2d(dim, dim, 4, 2, 1),
+            nn.BatchNorm2d(dim),
+            nn.ReLU(True),
+            nn.Conv2d(dim, dim, 4, 2, 1),
+            nn.BatchNorm2d(dim),
+            nn.ReLU(True),
+            nn.Conv2d(dim, dim, 4, 2, 1),
+            ResBlock(dim),
+            ResBlock(dim),
+        )
+
+        dim_size = 4*4*dim
+        if cond_size is not None:
+            dim_size += cond_size
+        self.fc_mu = nn.Linear(dim_size, latent_size)
+        self.fc_logsigma = nn.Linear(dim_size, latent_size)
+
+
+    def forward(self, x, cond=None): # pylint: disable=arguments-differ
+        x = self.encoder(x)
+        x = x.view(x.size(0), -1)
+
+        if self.cond_size is not None:
+            assert cond is not None
+            x = torch.cat((x, cond), 1)
+
+        mu = self.fc_mu(x)
+        logsigma = torch.tanh(self.fc_logsigma(x))
+
+        return mu, logsigma
+
 class SpatialSoftmaxEncoder(nn.Module):
     def __init__(self, img_size, latent_size):
         super(SpatialSoftmaxEncoder, self).__init__()
@@ -110,8 +184,8 @@ class VAE(nn.Module):
     """ Variational Autoencoder """
     def __init__(self, img_size, latent_size, cond_size=None):
         super(VAE, self).__init__()
-        self.encoder = Encoder(img_size, latent_size, cond_size=cond_size)
-        self.decoder = Decoder(img_size, latent_size)
+        self.encoder = EncoderLarge(img_size, latent_size, cond_size=cond_size)
+        self.decoder = DecoderLarge(img_size, latent_size)
 
     def sample(self, z, device):
         return torch.sigmoid(self.decoder(z))
@@ -220,10 +294,3 @@ class AFPixelVAE(nn.Module):
         cond = self.decoder(z)
         recon_x = self.pixel_cnn(x, cond)
         return recon_x, mu_z, logsigma_z, eps, logdet, z
-
-class VQVAE(nn.Module):
-    def __init__(self, img_size, latent_size, latent_dim):
-        super(VQVAE, self).__init__()
-        self.img_size = img_size
-        self.latent_size = latent_size
-        self.latent_dim = latent_dim

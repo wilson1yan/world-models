@@ -36,12 +36,15 @@ BSIZE = 16
 SEQ_LEN = 32
 epochs = 1000
 
-latent_shape = (16, 16)
+latent_shape = (8, 8)
 code_dim = 128
 K = 128
 
 discrete = True
 action_dim = 18
+
+# discrete = False
+# action_dim = 3
 
 # Loading VAE
 vae_dir = join(args.logdir, args.dataset, 'vqvae')
@@ -55,13 +58,13 @@ print("Loading VAE at epoch {} "
 vae = torch.load(join(vae_dir, 'model_best.pt')).to(device)
 
 # Loading model
-rnn_dir = join(args.logdir, args.dataset, 'cat_rnn_st')
+rnn_dir = join(args.logdir, args.dataset, 'cat_rnn_mse')
 rnn_file = join(rnn_dir, 'best.tar')
 
 if not exists(rnn_dir):
     makedirs(rnn_dir)
 
-mdrnn = RNNCat(latent_shape, code_dim, K, action_dim, RSIZE, st=True).to(device)
+mdrnn = RNNCat(latent_shape, code_dim, K, action_dim, RSIZE, mode='mse').to(device)
 optimizer = torch.optim.RMSprop(mdrnn.parameters(), lr=2e-4, alpha=.9)
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
@@ -90,11 +93,11 @@ transform = transforms.Compose([
 
 train_loader = DataLoader(
     RolloutSequenceDataset(join('datasets', args.dataset), SEQ_LEN,
-                           transform, buffer_size=100),
+                           transform, buffer_size=30),
     batch_size=BSIZE, num_workers=8, shuffle=True)
 test_loader = DataLoader(
     RolloutSequenceDataset(join('datasets', args.dataset), SEQ_LEN,
-                           transform, train=False, buffer_size=100),
+                           transform, train=False, buffer_size=30),
     batch_size=BSIZE, num_workers=8)
 
 def to_latent(obs, next_obs):
@@ -151,18 +154,7 @@ def get_loss(latent_obs, action, reward, terminal,
                              for arr in [latent_obs, action,
                                        reward, terminal]]
     dist_outs, rs, ds = mdrnn(action, latent_obs)
-    dist_outs = dist_outs.permute(0, 2, 1, 3, 4).contiguous()
-    bs, seq_len, c, h, w = dist_outs.size()
-    dist_outs = dist_outs.view(bs * seq_len, c, h, w)
-    z_q_x_st, z_q_x, _ = vae.codebook.straight_through(dist_outs)
-    dist_outs = dist_outs.view(bs, seq_len, code_dim, h, w)
-    z_q_x = z_q_x.view(bs, seq_len, code_dim, h, w)
-    z_q_x_st = z_q_x_st.view(bs, seq_len, code_dim, h, w)
-
-    transl = f.mse_loss(z_q_x_st, latent_next_obs)
-    # transl += f.mse_loss(dist_outs, z_q_x.detach())
-
-    gmm = transl
+    gmm = f.mse_loss(dist_outs, indices_next_obs.float().detach())
     bce = f.binary_cross_entropy_with_logits(ds, terminal)
     if include_reward:
         mse = f.mse_loss(rs, reward)
@@ -170,7 +162,7 @@ def get_loss(latent_obs, action, reward, terminal,
     else:
         mse = 0
         scale = LSIZE + 1
-    loss = gmm + bce + mse
+    loss = (gmm + bce + mse) / scale
     return dict(gmm=gmm, bce=bce, mse=mse, loss=loss)
 
 def process(data):
@@ -248,7 +240,7 @@ for e in range(epochs):
     is_best = not cur_best or test_loss < cur_best
     if is_best:
         cur_best = test_loss
-    tmp = RNNCatCell(latent_shape, code_dim, K, action_dim, RSIZE, st=True)
+    tmp = RNNCatCell(latent_shape, code_dim, K, action_dim, RSIZE, mode='mse')
     tmp.load_state_dict({k.strip('_l0'): v for k, v in mdrnn.state_dict().items()})
     save_checkpoint({
         "optimizer": optimizer.state_dict(),

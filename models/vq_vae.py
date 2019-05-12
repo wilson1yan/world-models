@@ -159,16 +159,16 @@ class Encoder(nn.Module): # pylint: disable=too-many-instance-attributes
         return x
 
 class VectorQuantizedVAELarge(nn.Module):
-    def __init__(self, img_size, dim, K=128):
+    def __init__(self, img_size, dim, K=256):
         super(VectorQuantizedVAELarge, self).__init__()
         self.encoder = nn.Sequential(
             nn.Conv2d(img_size[0], dim, 4, 2, 1),
             nn.BatchNorm2d(dim),
             nn.ReLU(True),
             nn.Conv2d(dim, dim, 4, 2, 1),
-            # nn.BatchNorm2d(dim),
-            # nn.ReLU(True),
-            # nn.Conv2d(dim, dim, 4, 2, 1),
+            nn.BatchNorm2d(dim),
+            nn.ReLU(True),
+            nn.Conv2d(dim, dim, 4, 2, 1),
             # nn.BatchNorm2d(dim),
             # nn.ReLU(True),
             # nn.Conv2d(dim, dim, 4, 2, 1),
@@ -185,9 +185,9 @@ class VectorQuantizedVAELarge(nn.Module):
             nn.ConvTranspose2d(dim, dim, 4, 2, 1),
             nn.BatchNorm2d(dim),
             nn.ReLU(True),
-            # nn.ConvTranspose2d(dim, dim, 4, 2, 1),
-            # nn.BatchNorm2d(dim),
-            # nn.ReLU(True),
+            nn.ConvTranspose2d(dim, dim, 4, 2, 1),
+            nn.BatchNorm2d(dim),
+            nn.ReLU(True),
             # nn.ConvTranspose2d(dim, dim, 4, 2, 1),
             # nn.BatchNorm2d(dim),
             # nn.ReLU(True),

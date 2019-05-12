@@ -33,7 +33,7 @@ parser.add_argument('--noreload', action='store_true',
                     help='Best model is not reloaded if specified')
 parser.add_argument('--model', type=str, default='vae')
 parser.add_argument('--dataset', type=str, default='carracing')
-parser.add_argument('--beta', type=float, default=1.0)
+parser.add_argument('--beta', type=float, default=0.25)
 
 
 args = parser.parse_args()

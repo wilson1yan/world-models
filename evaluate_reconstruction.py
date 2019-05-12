@@ -57,6 +57,7 @@ data = torch.floor(data * 255 / (2 ** 8 / N_COLOR_DIM)) / (N_COLOR_DIM - 1)
 
 with torch.no_grad():
     z = model.encode(data)[0]
+    print(z.size())
     recon_x2 = model.sample(z, device)
     recon_x2 = recon_x2.cpu()
 

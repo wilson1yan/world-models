@@ -1,6 +1,8 @@
 import torch.nn as nn
 import torch.nn.functional as F
 
+import numpy as np
+
 class MLP(nn.Module):
 
     def __init__(self, input_dim, output_dim, hidden_dims=[],
@@ -23,6 +25,30 @@ class MLP(nn.Module):
             out = self.output_activation(out)
         return out
 
+class CondConv2d(nn.Module):
+
+    def __init__(self, input_size, in_channels, out_channels,
+                 kernel_size, stride=1,
+                 padding=0, cond_size=None):
+        super(CondConv2d, self).__init__()
+        self.cond_size = cond_size
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size,
+                              stride=stride, padding=padding)
+        c, h, w = input_size
+        self.output_shape = (out_channels, int((h-kernel_size+2*padding)/stride + 1),
+                             int((w-kernel_size+2*padding)/stride + 1))
+        if cond_size is not None:
+            to = int(np.prod(self.output_shape))
+            self.cond_layer = nn.Linear(cond_size, to)
+
+    def forward(self, x, cond=None):
+        if self.cond_size is not None:
+            assert cond is not None
+        x = self.conv(x)
+        if self.cond_size is not None:
+            cond = self.cond_layer(cond).view(x.size(0), *self.output_shape)
+            x += cond
+        return x
 
 class SimpleConv(nn.Module):
     def __init__(self, in_channels, n_filters, reduce_factor=0):

@@ -43,7 +43,7 @@ torch.backends.cudnn.benchmark = True
 
 device = torch.device("cuda" if cuda else "cpu")
 
-n_categories = 128
+n_categories = 8
 
 transform_train = transforms.Compose([
     transforms.ToTensor(),
@@ -68,7 +68,7 @@ dataset_train = RolloutObservationDataset(dataset_folder,
                                           buffer_size=100)
 dataset_test = RolloutObservationDataset(dataset_folder,
                                          transform_test, train=False,
-                                         buffer_size=100)
+                                         buffer_size=30)
 train_loader = torch.utils.data.DataLoader(
     dataset_train, batch_size=args.batch_size, shuffle=True, num_workers=2)
 test_loader = torch.utils.data.DataLoader(
@@ -115,12 +115,11 @@ def loss_function(x, out):
     x_tilde, log_q = out
 
     if args.model == 'vae' or args.model == 'vae_large':
-        rcl = F.mse_loss(x_tilde, x)
+        rcl = F.mse_loss(x_tilde, x, size_average=False) / x.size(0)
     else:
         rcl = F.cross_entropy(x_tilde, (x * (N_COLOR_DIM - 1)).long())
     kl = log_q.exp() * (log_q - np.log(1. / n_categories))
     kl = kl.sum(1).mean()
-
     loss = rcl + kl
     return loss, rcl, kl
 
@@ -145,10 +144,12 @@ def train(epoch):
         optimizer.step()
         model.anneal()
         if batch_idx % 20 == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, BCE: {:.3f}, KLD: {:.3f}'.format(
+            print("Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}, BCE: {:.3f}, "
+                  "KLD: {:.3f}, Temp: {:.3f}".format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader),
-                loss.item() / len(data), bce.item() / len(data), kld.item() / len(data)))
+                loss.item() / len(data), bce.item() / len(data),
+                kld.item() / len(data), model.temperature))
 
     print('====> Epoch: {} Average loss: {:.4f}'.format(
         epoch, train_loss / len(train_loader.dataset)))
