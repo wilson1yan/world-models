@@ -35,7 +35,10 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # constants
 BSIZE = 16
 SEQ_LEN = 32
-epochs = 30
+epochs = 100
+
+discrete = True
+asize = 18
 
 # Loading VAE
 vae_dir = join(args.logdir, args.dataset, 'vae')
@@ -55,7 +58,7 @@ rnn_file = join(rnn_dir, 'best.tar')
 if not exists(rnn_dir):
     makedirs(rnn_dir)
 
-mdrnn = MDRNN(LSIZE, ASIZE, RSIZE, 5).to(device)
+mdrnn = MDRNN(LSIZE, asize, RSIZE, 5).to(device)
 optimizer = torch.optim.RMSprop(mdrnn.parameters(), lr=1e-3, alpha=.9)
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
 earlystopping = EarlyStopping('min', patience=30)
@@ -144,6 +147,10 @@ def get_loss(latent_obs, action, reward, terminal,
                            for arr in [latent_obs, action,
                                        reward, terminal,
                                        latent_next_obs]]
+    if discrete:
+        actions = torch.zeros(*action.size(), asize).to(device)
+        actions.scatter_(2, action.long(), 1)
+        action = actions
     mus, sigmas, logpi, rs, ds = mdrnn(action, latent_obs)
     gmm = gmm_loss(latent_next_obs, mus, sigmas, logpi)
     bce = f.binary_cross_entropy_with_logits(ds, terminal)
@@ -225,7 +232,7 @@ for e in range(epochs):
     is_best = not cur_best or test_loss < cur_best
     if is_best:
         cur_best = test_loss
-    tmp = MDRNNCell(LSIZE, ASIZE, RSIZE, 5)
+    tmp = MDRNNCell(LSIZE, asize, RSIZE, 5)
     tmp.load_state_dict({k.strip('_l0'): v for k, v in mdrnn.state_dict().items()})
     save_checkpoint({
         "optimizer": optimizer.state_dict(),

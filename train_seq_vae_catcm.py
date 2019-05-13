@@ -147,8 +147,8 @@ def main():
     torch.manual_seed(123)
     torch.backends.cudnn.benchmark = True
 
-    asize = 18
-    discrete = True
+    asize = 3
+    discrete = False
 
     vae_dir = join(args.logdir, args.dataset, 'seq_vae_cat')
     if not exists(vae_dir):
